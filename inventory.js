@@ -61,7 +61,7 @@ function renderPanel() {
   if (!v) { openV = null; panel.innerHTML = ""; panel.hidden = true; scrim.hidden = true; return; }
   const it = D.ITEMS.find((x) => x.vars.includes(v)); const s = status(v); const sh = s === "short" ? shortBy(v) : 0; const com = committedTo(v.r); const err = store.errs["inv:" + v.id];
   panel.hidden = false; scrim.hidden = false;
-  panel.innerHTML = `<div class="ptop"><div><div class="sub">${esc(it.coll)} · ${esc(it.type.replace(/s$/, "").replace(/^Supplie$/, "Supply"))}</div><h3>${esc(it.name)}</h3></div><button type="button" class="x" id="close" aria-label="Close">✕</button></div>
+  panel.innerHTML = `<div class="ptop"><div><div class="sub">${esc(it.coll)} · ${esc(it.type.replace(/s$/, "").replace(/^Supplie$/, "Supply"))}</div><h3>${esc(it.name)}</h3></div><span><button type="button" class="btn ghost mini" id="pedit">Edit</button> <button type="button" class="x" id="close" aria-label="Close">✕</button></span></div>
     ${it.vars.length > 1 ? `<div class="pvars" role="group" aria-label="Variation">${it.vars.map((x) => `<button type="button" data-v="${esc(x.id)}" aria-current="${x.id === v.id}">${esc(label(x))} · ${x.tracked ? x.stock : "–"}</button>`).join("")}</div>` : ""}
     <div class="sub" style="text-align:center;font-weight:700">${esc(label(v))}${v.r.sku ? ` · <span class="mono">${esc(v.r.sku)}</span>` : ""}</div>
     ${!v.tracked ? `<div class="sub" style="text-align:center">This item isn't tracked, so it has no shelf count.</div>` : `
@@ -150,11 +150,59 @@ async function addVariation(it) {
   };
 }
 
+/* ---------- Add a brand-new item (piece) through add_variant, then its starting count ---------- */
+async function newItem() {
+  const m = modal(`<h3>Add item</h3><p class="sub">Loading the catalog…</p>`, { label: "Add item" }); const card = m.el.querySelector(".obmodal-card");
+  let opts; try { opts = await options(); } catch (e) { card.innerHTML = `<h3>Add item</h3><p class="err">⚠ ${esc(db.errText(e))}</p>`; return; }
+  const colls = (opts.collections || []).map((c) => c.name); const cats = opts.categories || ["Hide", "Ledge", "Climb", "Floor Insert", "Insert", "Part", "Add-on", "Supply"];
+  const colors = (opts.colors || []).map((c) => c.name).sort((a, b) => a.localeCompare(b));
+  const sel = (id, list, first) => `<select id="${id}">${first ? `<option value="">${first}</option>` : ""}${list.map((x) => `<option>${esc(x)}</option>`).join("")}<option value="__other">Other…</option></select><input id="${id}Other" hidden>`;
+  card.innerHTML = `<h3>Add item</h3><form class="addvar">
+    <div class="srow"><label style="flex:2 1 220px">Name<input id="nName" placeholder="e.g. Mushroom Ledge" required></label><label>Collection${sel("nColl", colls, "(none)")}</label><label>Type<select id="nCat">${cats.filter((c) => !/^(Kit|Set|Enclosure)$/.test(c)).map((c) => `<option>${esc(c)}</option>`).join("")}</select></label></div>
+    <div class="srow"><label>Size${sel("nSize", ["Small", "Large", "Sling"], "")}</label><label>Color${sel("nC1", colors, "(none)")}</label><label id="nC2wrap" hidden>Color 2${sel("nC2", colors, "(none)")}</label><label>Starting count<input id="nCount" type="number" min="0" max="999" value="0" inputmode="numeric"></label></div>
+    <p class="err" id="nErr"></p><div class="row"><button type="submit" class="btn accent" id="nSave">Add</button><button type="button" class="btn ghost" data-close>Cancel</button></div></form>`;
+  const q = (s) => card.querySelector(s); const err = (t) => { q("#nErr").textContent = t || ""; };
+  q("[data-close]").onclick = m.close; q("#nSize").value = "Small";
+  card.querySelectorAll("select").forEach((s) => s.addEventListener("change", () => { const o = q("#" + s.id + "Other"); if (o) { o.hidden = s.value !== "__other"; if (!o.hidden) o.focus(); } q("#nC2wrap").hidden = q("#nCat").value !== "Floor Insert"; err(""); }));
+  const val = (id) => { const s = q("#" + id); return s.value === "__other" ? q("#" + id + "Other").value.trim() : s.value; };
+  setTimeout(() => q("#nName").focus(), 30);
+  q("form").onsubmit = async (e) => {
+    e.preventDefault(); err("");
+    const name = q("#nName").value.trim(), coll = val("nColl"), cat = q("#nCat").value, size = val("nSize"), c1 = val("nC1"), c2 = cat === "Floor Insert" ? val("nC2") : ""; const n = Math.max(0, Math.round(Number(q("#nCount").value) || 0));
+    if (!name) return err("Give it a name."); if (!size) return err("Pick or type a size."); if (c2 && !c1) return err("Pick Color 1 first.");
+    const colorLabel = [c1, c2].filter(Boolean).join(" + ");
+    const inventory_name = `${coll ? coll + " - " : ""}${name} (${[size, colorLabel].filter(Boolean).join(", ")})`;
+    if (store.inv.some((r) => r.item.toLowerCase() === inventory_name.toLowerCase())) return err(`${inventory_name} is already in Inventory.`);
+    const isNew = ["product", "size"]; if (coll && !colls.includes(coll)) isNew.push("collection"); for (const c of [c1, c2]) if (c && !colors.includes(c)) isNew.push("color:" + c);
+    const btn = q("#nSave"); btn.disabled = true; btn.textContent = "Adding…";
+    let r; try { r = await db.addVariant({ product: name, collection: coll || null, category: cat, size, color_1: c1 || null, color_2: c2 || null, inventory_name, new: isNew }); }
+    catch (x) { btn.disabled = false; btn.textContent = "Add"; return err(db.errText(x)); }
+    OPTS = null; // catalog changed
+    if (n > 0) { try { await db.applyMoves([{ notion_id: r.notion_id, kind: "count", qty: n, reason: "Starting count", ref: "inventory" }]); } catch (x) { await reloadInventory(); render(); btn.disabled = false; btn.textContent = "Add"; return err(`Added ${inventory_name}, but the starting count was not saved: ${db.errText(x)}. Count it from its tile.`); } }
+    m.close(); toast(`Added ${inventory_name}${n ? ` · ${n} on shelf` : ""}`); await reloadInventory(); openV = r.notion_id; render();
+  };
+}
+
+/* ---------- Edit an item: name and note (update_variant), or remove it (archive_variant, only at 0 on the shelf) ---------- */
+function editItem(v) {
+  const m = modal(`<h3>Edit item</h3><form class="addvar"><div class="srow"><label style="flex:1 1 100%">Name<input id="eName" value="${esc(v.r.item)}" required></label></div>
+    <div class="srow"><label style="flex:1 1 100%">Note<input id="eNote" value="${esc(v.r.note || "")}" placeholder="Optional"></label></div>
+    <p class="err" id="eErr"></p><div class="row"><button type="submit" class="btn accent" id="eSave">Save</button><button type="button" class="btn ghost" data-close>Cancel</button><span style="flex:1"></span><button type="button" class="btn ghost" id="eDel">Remove item</button></div></form>`, { label: "Edit item" });
+  const q = (s) => m.el.querySelector(s); const err = (t) => { q("#eErr").textContent = t || ""; };
+  q("[data-close]").onclick = m.close;
+  q("form").onsubmit = async (e) => { e.preventDefault(); err(""); q("#eSave").disabled = true;
+    try { await db.updateVariant({ id: v.id, inventory_name: q("#eName").value.trim(), note: q("#eNote").value, updated_at: v.r.updated_at }); m.close(); toast("Saved " + q("#eName").value.trim()); await reloadInventory(); render(); }
+    catch (x) { err(db.errText(x)); q("#eSave").disabled = false; } };
+  q("#eDel").onclick = async () => { if (q("#eDel").dataset.sure !== "1") { q("#eDel").dataset.sure = "1"; q("#eDel").textContent = "Tap again to remove"; return; } err("");
+    try { await db.archiveVariant(v.id); m.close(); toast("Removed " + v.r.item); openV = null; await reloadInventory(); render(); }
+    catch (x) { err(db.errText(x)); q("#eDel").dataset.sure = ""; q("#eDel").textContent = "Remove item"; } };
+}
+
 export function open(id, pmode = "adjust") { mode = "shelf"; openV = id; panelMode = pmode; render(); const el = host && host.querySelector(`.tile[data-v="${CSS.escape(id)}"]`); if (el) el.scrollIntoView({ block: "center" }); }
 
 export function init() {
   host = document.getElementById("invHost"); if (!host) return;
-  host.innerHTML = `<div class="viewbar"><div class="viewtabs" role="group" aria-label="View"><button type="button" id="mShelf" data-mode="shelf" aria-pressed="true"><span aria-hidden="true">▦</span><span>Shelf view</span></button><button type="button" id="mList" data-mode="list" aria-pressed="false"><span aria-hidden="true">☰</span><span>List view</span></button></div></div>
+  host.innerHTML = `<div class="viewbar"><div class="viewtabs" role="group" aria-label="View"><button type="button" id="mShelf" data-mode="shelf" aria-pressed="true"><span aria-hidden="true">▦</span><span>Shelf view</span></button><button type="button" id="mList" data-mode="list" aria-pressed="false"><span aria-hidden="true">☰</span><span>List view</span></button></div><span style="flex:1"></span><button type="button" class="btn" id="newItem">+ Add item</button></div>
     <div class="filters" id="filters" role="group" aria-label="Show"></div>
     <div class="search"><input type="search" id="q" placeholder="Search item, color or size" aria-label="Search inventory"></div>
     <div class="body" id="shelf"><nav class="rail" id="rail" aria-label="Collections"></nav><div class="list" id="list"></div></div>
@@ -170,6 +218,8 @@ export function init() {
     if ((b = t.closest("[data-v]"))) { openV = b.dataset.v; render(); return; }
     if ((b = t.closest("[data-pstep]"))) { const v = D.V.find((x) => x.id === openV); if (!v) return; setCount(v, Math.max(0, (v.val || 0) + Number(b.dataset.pstep))); render(); return; }
     if ((b = t.closest("[data-cstep]"))) { const v = D.V.find((x) => x.id === b.dataset.id); const inp = host.querySelector("#n-" + CSS.escape(v.id)); const cur = inp && inp.value !== "" ? Number(inp.value) : v.stock || 0; setCount(v, Math.max(0, cur + Number(b.dataset.cstep))); const y = window.scrollY; render(); window.scrollTo(0, y); return; }
+    if (t.closest("#newItem")) { newItem(); return; }
+    if (t.closest("#pedit")) { const v = D.V.find((x) => x.id === openV); if (v) editItem(v); return; }
     if (t.closest("#close") || t.id === "scrim") { openV = null; render(); return; }
     if (t.closest("#psave")) { saveCounts([openV]); return; }
     if (t.closest("#pundo")) { edits.delete(openV); touched.delete(openV); render(); return; }

@@ -51,6 +51,8 @@ export const readOrders = (status = "all", id = null) => rpc("read_orders", id ?
 export const readOrder = async (id) => { const a = await readOrders("all", id); return Array.isArray(a) && a[0] ? a[0] : null; };
 export const inventoryRows = () => rpc("inventory_rows");
 export const catalogOptions = () => rpc("catalog_options");
+export const updateVariant = async (p) => { const r = await rpc("update_variant", { p }); return Array.isArray(r) ? r[0] : r; };
+export const archiveVariant = (id) => rpc("archive_variant", { p_id: id });
 export const readAppState = (keys = null, known = {}) => rpc("read_app_state", { keys, known });
 
 /* ---------- writes (every one carries op_id and p_by) ---------- */
