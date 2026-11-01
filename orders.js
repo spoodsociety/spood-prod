@@ -241,13 +241,14 @@ function lineHtml(o, l) {
   const pkOpt = `<button type="button" role="menuitemcheckbox" aria-checked="${!!l.packed}" data-packbtn="${key}" data-oid="${o.id}" data-from="${pull ? "shelf" : "print"}" data-set="${l.packed ? "0" : "1"}" class="nm-pack">${l.packed ? "✓ Packed (tap to unpack)" : "Mark as packed"}</button>`;
   let menu = "";
   if (canMark && open && !busy) {
-    if (pull && !l.packed) menu = pkOpt + opt("nostock", "Change to print", false) + `<button type="button" role="menuitem" data-oeline="${key}" data-oid="${o.id}">✎ Change item…</button>`;
+    const invOpt = r && r.in_stock != null ? `<button type="button" role="menuitem" data-invadj="${esc(r.id)}">▦ Adjust inventory…</button>` : "";
+    if (pull && !l.packed) menu = pkOpt + opt("nostock", "Change to print", false) + `<button type="button" role="menuitem" data-oeline="${key}" data-oid="${o.id}">✎ Change item…</button>` + invOpt;
     else {
       const tk = e.st === "print" && !l.packed ? takeFrom(o, l) : []; const also = e.st === "print" && !l.packed ? alsoPrint(o, l) : null;
       menu = opt(e.forced ? "nostock" : "print", "Needs printing", e.st === "print") + opt("printing", "Printing", e.st === "printing") + opt("printed", "Done", e.st === "printed")
         + (e.st === "print" && !l.packed ? `<button type="button" role="menuitem" class="nm-take" data-take="${key}" data-oid="${o.id}">⇄ Take from another order${tk.length ? ` (${tk.length})` : ""}</button>` : "")
         + (packable ? pkOpt : "") + ((l.print_state || "") !== "" ? opt("", "Reset (shelf if in stock)", false) : "")
-        + `<button type="button" role="menuitem" data-oeline="${key}" data-oid="${o.id}">✎ Change item…</button>`
+        + `<button type="button" role="menuitem" data-oeline="${key}" data-oid="${o.id}">✎ Change item…</button>` + invOpt
         + (also ? `<div class="nm-also" role="none"><div class="nm-alsoh">${also.length ? "Also needs printing · " + also.length : "No other orders need this printed"}</div>${also.map((x) => `<button type="button" role="menuitem" class="nm-alsoi" data-alsogo="${x.l.uid}"><span>${esc(x.o.customer)}</span><span>${esc(dayLabel(shipBy(x.o)))}</span></button>`).join("")}</div>` : "");
     }
     menu = `<div class="nmenu" role="menu" aria-label="Status for ${esc(cleanText(l.text))}">${menu}</div>`;
@@ -323,6 +324,7 @@ function binWire() {
     if ((b = t.closest("[data-binopen]"))) { e.stopPropagation(); BIN.stOpen = null; BIN.open = BIN.open === b.dataset.binopen ? null : b.dataset.binopen; binRender(); return; }
     if ((b = t.closest("[data-alsogo]"))) { e.stopPropagation(); const n = box.querySelector(`[data-line="${b.dataset.alsogo}"]`); if (n) { n.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" }); n.closest(".ncard").classList.add("flash"); setTimeout(() => n.closest(".ncard").classList.remove("flash"), 1600); } return; }
     if ((b = t.closest("[data-take]"))) { e.stopPropagation(); BIN.open = null; binRender(); takeOpen(orderOf(b.dataset.oid), b.dataset.take); return; }
+    if ((b = t.closest("[data-invadj]"))) { e.stopPropagation(); BIN.open = null; binRender(); document.dispatchEvent(new CustomEvent("spood:inventory", { detail: { id: b.dataset.invadj, mode: "adjust" } })); return; }
     if ((b = t.closest("[data-ls]"))) { e.stopPropagation(); const o = orderOf(b.dataset.oid); BIN.open = null; const uid = b.dataset.uid, st = b.dataset.ls; const l = (o.lines || []).find((x) => x.uid === uid); const patch = { print_state: st, print_src: "bin" }; if (l && l.packed && (st === "print" || st === "printing" || st === "nostock")) Object.assign(patch, { packed: false }); setLine(o.id, uid, patch); return; }
     if ((b = t.closest("[data-packbtn]"))) { e.stopPropagation(); BIN.open = null; setLine(b.dataset.oid, b.dataset.packbtn, b.dataset.set === "1" ? { packed: true, packed_from: b.dataset.from } : { packed: false }); return; }
   });

@@ -547,6 +547,7 @@ import * as inv from "./inventory.js";
 const tabs = document.querySelectorAll("nav.tabs button");
 const showTab = (name) => { tabs.forEach((x) => x.setAttribute("aria-selected", String(x.dataset.tab === name))); document.querySelectorAll("section.panel").forEach((p) => (p.hidden = p.id !== "tab-" + name)); try { localStorage.setItem("spood.tab", name); } catch (e) {} };
 tabs.forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
+document.addEventListener("spood:inventory", (e) => { showTab("inventory"); inv.open(e.detail.id, e.detail.mode); });
 let startTab = "bins"; try { startTab = localStorage.getItem("spood.tab") || "bins"; } catch (e) {}
 if (![...tabs].some((b) => b.dataset.tab === startTab)) startTab = "bins";
 showTab(startTab);

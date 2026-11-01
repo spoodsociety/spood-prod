@@ -150,6 +150,8 @@ async function addVariation(it) {
   };
 }
 
+export function open(id, pmode = "adjust") { mode = "shelf"; openV = id; panelMode = pmode; render(); const el = host && host.querySelector(`.tile[data-v="${CSS.escape(id)}"]`); if (el) el.scrollIntoView({ block: "center" }); }
+
 export function init() {
   host = document.getElementById("invHost"); if (!host) return;
   host.innerHTML = `<div class="viewbar"><div class="viewtabs" role="group" aria-label="View"><button type="button" id="mShelf" data-mode="shelf" aria-pressed="true"><span aria-hidden="true">▦</span><span>Shelf view</span></button><button type="button" id="mList" data-mode="list" aria-pressed="false"><span aria-hidden="true">☰</span><span>List view</span></button></div></div>
