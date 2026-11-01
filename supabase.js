@@ -3,12 +3,24 @@ import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 
 export const URL = "https://hkllbpipcfzzppbgkzrh.supabase.co";
 export const KEY = "sb_publishable_Vd1J6IVnTCP6zRR3CPz9gg_UWx1juTH";
-export const sb = createClient(URL, KEY, { db: { schema: "hq" }, auth: { persistSession: false } });
+export const sb = createClient(URL, KEY, { db: { schema: "hq" } });
 
-/* ---------- who is saving ---------- */
-const ME_KEY = "spood.production.me";
-export function me() { try { return localStorage.getItem(ME_KEY) || ""; } catch (e) { return ""; } }
-export function setMe(name) { try { localStorage.setItem(ME_KEY, String(name || "").trim()); } catch (e) {} }
+/* ---------- who is signed in (Supabase Auth; the database refuses every call without a session) ---------- */
+let user = null;
+export const me = () => (user ? String((user.user_metadata && user.user_metadata.name) || user.email.split("@")[0]) : "");
+export const email = () => (user ? user.email : "");
+export async function session() { const { data } = await sb.auth.getSession(); user = data.session ? data.session.user : null; return user; }
+export function onAuth(cb) { sb.auth.onAuthStateChange((event, s) => { user = s ? s.user : null; cb(event, user); }); }
+const authErr = (e) => { const m = String((e && e.message) || e || ""); if (/not on the shop list|Database error saving new user/i.test(m)) return "That email isn't on the shop list."; if (/Invalid login credentials/i.test(m)) return "Wrong email or password."; if (/Email not confirmed/i.test(m)) return "Confirm your email first (check your inbox), then sign in."; return m || "Sign-in failed"; };
+export async function signIn(em, password) { const { data, error } = await sb.auth.signInWithPassword({ email: em.trim().toLowerCase(), password }); if (error) throw new Error(authErr(error)); user = data.user; return user; }
+export async function signUp(em, password, name) {
+  const { data, error } = await sb.auth.signUp({ email: em.trim().toLowerCase(), password, options: { data: { name: name.trim() }, emailRedirectTo: location.href.split("#")[0] } });
+  if (error) throw new Error(authErr(error));
+  user = data.session ? data.user : null; return { user, needsConfirm: !data.session };
+}
+export async function resetPassword(em) { const { error } = await sb.auth.resetPasswordForEmail(em.trim().toLowerCase(), { redirectTo: location.href.split("#")[0] }); if (error) throw new Error(authErr(error)); }
+export async function setPassword(password) { const { error } = await sb.auth.updateUser({ password }); if (error) throw new Error(authErr(error)); }
+export async function signOut() { await sb.auth.signOut(); user = null; }
 
 /* ---------- op ids: one per attempt, so a retry of the same payload is a no-op server-side ---------- */
 export const opId = (prefix = "sp") => prefix + "-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6);

@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="robots" content="noindex">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Spood Production</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -448,6 +449,8 @@ table.t td.num,table.t th.num{text-align:right;font-variant-numeric:tabular-nums
 /* name modal */
 .namebox{display:flex;flex-direction:column;gap:10px}
 .namebox input{font-size:1.1rem;padding:10px 12px;border-radius:8px}
+.namebox .hint{margin:0;font-size:.9rem;color:var(--muted);min-height:1.2em}
+.namebox .row{flex-wrap:wrap}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
@@ -516,18 +519,43 @@ let startTab = "bins"; try { startTab = localStorage.getItem("spood.tab") || "bi
 if (![...tabs].some((b) => b.dataset.tab === startTab)) startTab = "bins";
 showTab(startTab);
 
-// who's saving: asked once, then shown in the header
-function askName() {
+// sign-in: the database refuses every call without a shop account, so nothing loads until there is one
+const who = document.getElementById("whoami");
+function signInModal(mode = "in") {
   return new Promise((res) => {
-    const m = orders.modal(`<h3>Who's working?</h3><p>Your name is saved with every change you make, so the team can see who did what.</p><form class="namebox"><input id="nameIn" autocomplete="name" placeholder="Your name" required maxlength="40"><div class="row"><button type="submit" class="btn accent">Start</button></div></form>`, { label: "Your name" });
-    m.el.querySelector("form").onsubmit = (e) => { e.preventDefault(); const v = m.el.querySelector("#nameIn").value.trim(); if (!v) return; db.setMe(v); m.close(); res(v); };
+    const m = orders.modal("", { label: "Sign in" });
+    const card = m.el.querySelector(".obmodal-card");
+    const draw = (note = "") => {
+      card.innerHTML = mode === "in"
+        ? `<h3>Sign in</h3><form class="namebox"><input id="aEmail" type="email" autocomplete="username" placeholder="Email" required><input id="aPw" type="password" autocomplete="current-password" placeholder="Password" required minlength="8"><div class="row"><button type="submit" class="btn accent">Sign in</button><button type="button" class="btn ghost" data-mode="up">Create account</button><button type="button" class="btn ghost" data-mode="reset">Forgot password</button></div><p class="hint" id="aNote">${orders.esc(note)}</p></form>`
+        : mode === "up"
+        ? `<h3>Create account</h3><form class="namebox"><input id="aName" autocomplete="name" placeholder="Your name" required maxlength="40"><input id="aEmail" type="email" autocomplete="username" placeholder="Email" required><input id="aPw" type="password" autocomplete="new-password" placeholder="Password (8+ characters)" required minlength="8"><div class="row"><button type="submit" class="btn accent">Create</button><button type="button" class="btn ghost" data-mode="in">Back</button></div><p class="hint" id="aNote">${orders.esc(note)}</p></form>`
+        : mode === "reset"
+        ? `<h3>Reset password</h3><form class="namebox"><input id="aEmail" type="email" autocomplete="username" placeholder="Email" required><div class="row"><button type="submit" class="btn accent">Send reset link</button><button type="button" class="btn ghost" data-mode="in">Back</button></div><p class="hint" id="aNote">${orders.esc(note)}</p></form>`
+        : `<h3>New password</h3><form class="namebox"><input id="aPw" type="password" autocomplete="new-password" placeholder="New password (8+ characters)" required minlength="8"><div class="row"><button type="submit" class="btn accent">Save</button></div><p class="hint" id="aNote">${orders.esc(note)}</p></form>`;
+      card.querySelectorAll("[data-mode]").forEach((b) => (b.onclick = () => { mode = b.dataset.mode; draw(); }));
+      const f = card.querySelector("form"); const v = (id) => { const el = card.querySelector(id); return el ? el.value : ""; };
+      f.onsubmit = async (e) => {
+        e.preventDefault(); f.querySelector("button[type=submit]").disabled = true;
+        try {
+          if (mode === "in") { await db.signIn(v("#aEmail"), v("#aPw")); }
+          else if (mode === "up") { const r = await db.signUp(v("#aEmail"), v("#aPw"), v("#aName")); if (r.needsConfirm) { mode = "in"; return draw("Account created. Click the link in your confirmation email, then sign in."); } }
+          else if (mode === "reset") { await db.resetPassword(v("#aEmail")); mode = "in"; return draw("Reset link sent. Open it on this device."); }
+          else { await db.setPassword(v("#aPw")); history.replaceState(null, "", location.pathname + location.search); }
+          m.close(); res(await db.session());
+        } catch (err) { draw(err.message); }
+      };
+      setTimeout(() => { const first = card.querySelector("input"); if (first) first.focus(); }, 30);
+    };
     m.el.addEventListener("click", (e) => { if (e.target === m.el) e.stopPropagation(); }, true);
-    setTimeout(() => m.el.querySelector("#nameIn").focus(), 30);
+    draw();
   });
 }
-const who = document.getElementById("whoami");
-const showWho = () => { who.innerHTML = db.me() ? `${orders.esc(db.me())} · <button type="button" class="btn ghost mini" id="chgName">change</button>` : ""; const b = document.getElementById("chgName"); if (b) b.onclick = async () => { await askName(); showWho(); }; };
-if (!db.me()) await askName();
+const showWho = () => { who.innerHTML = db.me() ? `${orders.esc(db.me())} · <button type="button" class="btn ghost mini" id="signOut">sign out</button>` : ""; const b = document.getElementById("signOut"); if (b) b.onclick = async () => { await db.signOut(); location.reload(); }; };
+let recovery = /type=recovery/.test(location.hash);
+db.onAuth((event, u) => { if (event === "PASSWORD_RECOVERY") recovery = true; if (event === "SIGNED_OUT" && !document.querySelector(".obmodal")) location.reload(); });
+if (!(await db.session())) await signInModal("in");
+if (recovery) await signInModal("newpw");
 showWho();
 
 orders.init(); plan.init(); inv.init();
