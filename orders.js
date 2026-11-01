@@ -210,14 +210,13 @@ function takeFrom(o, l) {
 export const hooks = {}; // set by the page: { lanes: () => [{printer, queued, printing}], queue: (lineUids, printer, start) => count }
 function queueDialog(o, l) {
   const like = alsoPrint(o, l); const lanes = hooks.lanes ? hooks.lanes() : [];
-  const m = modal(`<h3>Add to print queue</h3><p class="sub">${esc(cleanText(l.text))} · ${esc(o.customer)}</p>
+  const m = modal(`<h3>Printing</h3><p class="sub">${esc(cleanText(l.text))} · ${esc(o.customer)}</p>
     <form class="namebox"><label class="sub">Printer<select id="qPrinter">${lanes.map((x) => `<option value="${x.printer}">Printer ${x.printer}${x.printing ? " · printing" : ""}${x.queued ? ` · ${x.queued} queued` : ""}</option>`).join("")}</select></label>
     ${like.length ? `<label class="allto"><input type="checkbox" id="qLike" checked> Also queue ${plural(like.length, "like item")} from other orders</label>` : ""}
-    <label class="allto"><input type="checkbox" id="qStart" checked> Start printing now</label>
-    <p class="err" id="qErr"></p><div class="row"><button type="submit" class="btn accent">Queue</button><button type="button" class="btn ghost" data-close>Cancel</button></div></form>`, { label: "Add to print queue" });
+    <p class="err" id="qErr"></p><div class="row"><button type="submit" class="btn accent">Start printing</button><button type="button" class="btn ghost" data-close>Cancel</button></div></form>`, { label: "Add to print queue" });
   const q = (s) => m.el.querySelector(s); q("[data-close]").onclick = m.close;
   q("form").onsubmit = (e) => { e.preventDefault(); const uids = [l.uid, ...(q("#qLike") && q("#qLike").checked ? like.map((x) => x.l.uid) : [])];
-    try { const n = hooks.queue(uids, q("#qPrinter").value, q("#qStart").checked); m.close(); toast(`${plural(n, "piece")} → Printer ${q("#qPrinter").value}${q("#qStart").checked ? ", printing" : ", queued"}`); } catch (err) { q("#qErr").textContent = err.message; } };
+    try { const n = hooks.queue(uids, q("#qPrinter").value, true); m.close(); toast(`${plural(n, "piece")} printing on Printer ${q("#qPrinter").value}`); } catch (err) { q("#qErr").textContent = err.message; } };
 }
 function alsoPrint(o, l) {
   const r = invRowOf(l); const me = normName(cleanText(l.text)); const out = [];
@@ -254,11 +253,11 @@ function lineHtml(o, l) {
   let menu = "";
   if (canMark && open && !busy) {
     const invOpt = r && r.in_stock != null ? `<button type="button" role="menuitem" data-invadj="${esc(r.id)}">▦ Adjust inventory…</button>` : "";
-    const queueOpt = hooks.queue && (e.st === "print" || e.st === "printing") && !l.packed && !l.print_src ? `<button type="button" role="menuitem" data-queue="${key}" data-oid="${o.id}">⊞ Add to print queue…</button>` : "";
+    const printingOpt = hooks.queue && e.st !== "printing" && !l.packed ? `<button type="button" role="menuitem" data-queue="${key}" data-oid="${o.id}" class="nm-printing">Printing…</button>` : opt("printing", "Printing", e.st === "printing");
     if (pull && !l.packed) menu = pkOpt + opt("nostock", "Change to print", false) + `<button type="button" role="menuitem" data-oeline="${key}" data-oid="${o.id}">✎ Change item…</button>` + invOpt;
     else {
       const tk = e.st === "print" && !l.packed ? takeFrom(o, l) : []; const also = e.st === "print" && !l.packed ? alsoPrint(o, l) : null;
-      menu = opt(e.forced ? "nostock" : "print", "Needs printing", e.st === "print") + opt("printing", "Printing", e.st === "printing") + queueOpt + opt("printed", "Done", e.st === "printed")
+      menu = opt(e.forced ? "nostock" : "print", "Needs printing", e.st === "print") + printingOpt + opt("printed", "Done", e.st === "printed")
         + (e.st === "print" && !l.packed ? `<button type="button" role="menuitem" class="nm-take" data-take="${key}" data-oid="${o.id}">⇄ Take from another order${tk.length ? ` (${tk.length})` : ""}</button>` : "")
         + (packable ? pkOpt : "") + ((l.print_state || "") !== "" ? opt("", "Reset (shelf if in stock)", false) : "")
         + `<button type="button" role="menuitem" data-oeline="${key}" data-oid="${o.id}">✎ Change item…</button>` + invOpt
