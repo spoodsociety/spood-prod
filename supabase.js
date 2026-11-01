@@ -50,6 +50,7 @@ export async function rpc(fn, args = {}) {
 export const readOrders = (status = "all", id = null) => rpc("read_orders", id ? { p_status: status, p_id: id } : { p_status: status });
 export const readOrder = async (id) => { const a = await readOrders("all", id); return Array.isArray(a) && a[0] ? a[0] : null; };
 export const inventoryRows = () => rpc("inventory_rows");
+export const catalogOptions = () => rpc("catalog_options");
 export const readAppState = (keys = null, known = {}) => rpc("read_app_state", { keys, known });
 
 /* ---------- writes (every one carries op_id and p_by) ---------- */
@@ -58,6 +59,8 @@ export const saveOrder = (p) => rpc("save_order", { p: { op_id: opId("save"), ..
 export const completeOrder = (p, moves) => rpc("complete_order", { p: { op_id: opId("done"), ...p }, p_moves: moves, p_by: by() });
 export const undoOrderDone = (p) => rpc("undo_order_done", { p: { op_id: opId("undo"), ...p }, p_by: by() });
 export const setLineState = (lines) => rpc("set_line_state", { p: { op_id: opId("line"), lines }, p_by: by() });
+// add_variant: {product, collection?, size?, color_1?, color_2?, inventory_name?, new?: ["size","color:<name>"]}; the server makes the id and hands it back as notion_id
+export async function addVariant(p) { const r = await rpc("add_variant", { p }); return Array.isArray(r) ? r[0] : r; }
 export const applyMoves = (moves) => rpc("apply_moves", { p_moves: moves.map((m) => ({ op_id: opId("mv"), ...m })), p_by: by(), p_source: "hq" });
 export const setAppState = (key, value, version) => rpc("set_app_state", { p: { op_id: opId("state"), key, value, version }, p_by: by() });
 

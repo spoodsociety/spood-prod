@@ -1,6 +1,6 @@
 // Inventory: shelf view (tiles per variation), list view (end-of-day count), counts and adjustments through apply_moves.
 import * as db from "./supabase.js";
-import { $, esc, plural, store, onChange, owed, splitName, sizeLabel, toast, reloadInventory, setErr, shipBy, fmtDay, cleanText, invRowOf, eff, lineKind } from "./orders.js";
+import { $, esc, plural, store, onChange, owed, splitName, sizeLabel, toast, modal, reloadInventory, setErr, shipBy, fmtDay, cleanText, invRowOf, eff, lineKind } from "./orders.js";
 
 const PRODUCT_ORDER = ["Cosmic", "Galaxy", "Gothic", "Haunted", "Neon Halloween", "Woodland", "Yeti", "Ocean", "Christmas", "Celestial Bat"];
 const TAIL = ["Floor Inserts", "Hides", "Supplies"];
@@ -42,7 +42,7 @@ function renderShelf() {
   const list = D.ITEMS.filter((it) => coll === "all" || it.coll === coll).map((it) => ({ it, vs: it.vars.filter(passes) })).filter((x) => x.vs.length);
   const by = {}; list.forEach((x) => (by[x.it.coll] ||= []).push(x)); const keys = D.COLLS.filter((c) => by[c]);
   host.querySelector("#list").innerHTML = keys.length ? keys.map((c) => { const xs = by[c]; const pcs = xs.reduce((a, x) => a + x.it.vars.reduce((s, v) => s + Math.max(0, v.val || 0), 0), 0);
-    return `<section class="coll"><h2>${esc(c)} <small>${plural(xs.length, "item")} · ${pcs} on shelf</small></h2><div class="items">` + xs.map(({ it, vs }) => `<div class="item"><div class="iname"><b>${esc(it.name)}</b><small>${esc(it.type.replace(/s$/, "").replace(/^Supplie$/, "Supply"))}${it.vars.length > 1 ? " · " + it.vars.length + " variations" : ""}</small></div><div class="tiles">${vs.map(tile).join("")}</div><div class="itot"><b class="mono">${it.vars.reduce((s, v) => s + Math.max(0, v.val || 0), 0)}</b><small>on shelf</small></div></div>`).join("") + `</div></section>`; }).join("") : `<p class="sub">Nothing matches. Clear the search or pick "All items".</p>`;
+    return `<section class="coll"><h2>${esc(c)} <small>${plural(xs.length, "item")} · ${pcs} on shelf</small></h2><div class="items">` + xs.map(({ it, vs }) => `<div class="item"><div class="iname"><b>${esc(it.name)}</b><small>${esc(it.type.replace(/s$/, "").replace(/^Supplie$/, "Supply"))}${it.vars.length > 1 ? " · " + it.vars.length + " variations" : ""}</small></div><div class="tiles">${vs.map(tile).join("")}<button type="button" class="tile add" data-addvar="${esc(it.key)}" aria-label="Add a color or size of ${esc(it.name)}"><span class="tl">+ Add a color<br>or size</span></button></div><div class="itot"><b class="mono">${it.vars.reduce((s, v) => s + Math.max(0, v.val || 0), 0)}</b><small>on shelf</small></div></div>`).join("") + `</div></section>`; }).join("") : `<p class="sub">Nothing matches. Clear the search or pick "All items".</p>`;
 }
 function renderList() {
   const vs = D.ITEMS.flatMap((it) => it.vars).filter((v) => v.tracked && passes(v)); const searching = !!((host.querySelector("#q")?.value || "").trim() || filter !== "all");
@@ -50,7 +50,7 @@ function renderList() {
   const why = (v) => { const t = []; if (v.used > 0) t.push(`${v.used} committed · ${Math.max(0, (v.val || 0) - v.used)} free`); if (v.need > v.used) t.push(`${v.need - v.used} short for orders`); return t.length ? `<span class="sub">${t.join(" · ")}</span>` : ""; };
   const step = (v) => `<span class="cstep"><button type="button" data-cstep="-1" data-id="${esc(v.id)}" aria-label="One less">−</button><input id="n-${esc(v.id)}" data-count="${esc(v.id)}" inputmode="numeric" value="${v.val ?? ""}" aria-label="On the shelf: ${esc(v.item + " " + label(v))}"><button type="button" data-cstep="1" data-id="${esc(v.id)}" aria-label="One more">+</button></span>`;
   const rowOf = (v, nested) => `<div class="crow${edits.has(v.id) ? " done" : ""}"><span class="clab">${nested ? `<b>${esc(label(v))}</b>` : `<b>${esc(v.item)}</b>${label(v) !== "One style" ? ` <span class="sub">${esc(label(v))}</span>` : ""}`} ${why(v)}</span><span class="was mono">was ${v.stock ?? "–"}</span>${step(v)}</div>`;
-  const itemsOf = (list) => { const g = new Map(); list.forEach((v) => { const k = v.coll + "|" + v.item; if (!g.has(k)) g.set(k, []); g.get(k).push(v); }); return [...g.entries()].map(([k, vs2]) => { if (vs2.length === 1) return rowOf(vs2[0]); const tot = vs2.reduce((a, v) => a + Math.max(0, v.val || 0), 0), was = vs2.reduce((a, v) => a + Math.max(0, v.stock || 0), 0); return `<details class="csec" data-citem="${esc(k)}" ${searching || OPENI.has(k) ? "open" : ""} style="margin:4px 0"><summary><span>${esc(vs2[0].item)} <span class="sub">${vs2.length} variations</span></span><span class="cmeta mono">${was} → ${tot}</span></summary>${vs2.map((v) => rowOf(v, true)).join("")}</details>`; }).join(""); };
+  const itemsOf = (list) => { const g = new Map(); list.forEach((v) => { const k = v.coll + "|" + v.item; if (!g.has(k)) g.set(k, []); g.get(k).push(v); }); return [...g.entries()].map(([k, vs2]) => { if (vs2.length === 1) return rowOf(vs2[0]) + addPill(vs2[0]); const tot = vs2.reduce((a, v) => a + Math.max(0, v.val || 0), 0), was = vs2.reduce((a, v) => a + Math.max(0, v.stock || 0), 0); return `<details class="csec" data-citem="${esc(k)}" ${searching || OPENI.has(k) ? "open" : ""} style="margin:4px 0"><summary><span>${esc(vs2[0].item)} <span class="sub">${vs2.length} variations</span></span><span class="cmeta mono">${was} → ${tot}</span></summary>${vs2.map((v) => rowOf(v, true)).join("")}${addPill(vs2[0])}</details>`; }).join(""); };
   const order = LGROUP === "coll" ? D.COLLS : TYPES;
   host.querySelector("#countView").innerHTML = `<div class="count"><div class="ctool"><div class="viewtabs" role="group" aria-label="Group by"><button type="button" data-lgroup="coll" aria-pressed="${LGROUP === "coll"}">Collection</button><button type="button" data-lgroup="type" aria-pressed="${LGROUP === "type"}">Item type</button></div><span class="sub">${edits.size ? `${edits.size} changed, not saved` : "Enter moves to the next box"}</span></div><div class="crow" style="border:0"><span></span><span class="was">Saved</span><span class="sub" style="text-align:center">On shelf now</span></div>` +
     (order.filter((c) => secs[c]).map((c) => { const list = secs[c]; const ch = list.filter((v) => edits.has(v.id)).length; const key = LGROUP + ":" + c; return `<details class="csec" data-csec="${esc(key)}" ${searching || OPENC.has(key) ? "open" : ""}><summary><span>${esc(c)}</span><span class="cmeta">${ch ? `${ch} changed` : ""}</span></summary>${itemsOf(list)}</details>`; }).join("") || `<p class="sub" style="padding:14px">Nothing matches.</p>`) + `</div>` +
@@ -102,6 +102,54 @@ async function saveAdjust(v, kind, qty, reason) {
   saving = false; await reloadInventory(); render();
 }
 
+const addPill = (v) => { const it = D.ITEMS.find((x) => x.vars.includes(v)); return it ? `<div class="crow addrow"><button type="button" class="btn ghost mini" data-addvar="${esc(it.key)}">+ Add variation</button></div>` : ""; };
+
+/* ---------- Add a color or size: a new variant of an item already on the shelf (hq.add_variant, then a starting count) ---------- */
+let OPTS = null;
+async function options() { if (!OPTS) OPTS = await db.catalogOptions(); return OPTS; }
+function productOf(it, opts) { // the catalog product behind this item: the longest product id that prefixes a variation's sku
+  let best = null; for (const v of it.vars) { const sku = v.r.sku || ""; for (const p of opts.products || []) if (sku === p.id || sku.startsWith(p.id + "-")) if (!best || p.id.length > best.id.length) best = p; }
+  return best;
+}
+async function addVariation(it) {
+  const m = modal(`<h3>Add a color or size</h3><p class="sub">Loading the catalog…</p>`, { label: "Add a color or size" });
+  const card = m.el.querySelector(".obmodal-card");
+  let opts; try { opts = await options(); } catch (e) { card.innerHTML = `<h3>Add a color or size</h3><p class="err">⚠ ${esc(db.errText(e))}</p><div class="row"><button type="button" class="btn ghost" data-close>Close</button></div>`; card.querySelector("[data-close]").onclick = m.close; return; }
+  const prod = productOf(it, opts); const v0 = it.vars[0];
+  const collName = v0.r.collection || (prod && prod.collections && prod.collections.length ? ((opts.collections || []).find((c) => c.id === prod.collections[0]) || {}).name : "") || "";
+  const twoColors = (prod && prod.category === "Floor Insert") || /floor|checker/i.test(it.name + " " + v0.base);
+  const sizes = [...new Set([...(prod ? prod.sizes || [] : []), ...it.vars.map((v) => v.size).filter(Boolean), "Small", "Large"])];
+  const colors = (opts.colors || []).map((c) => c.name).sort((a, b) => a.localeCompare(b));
+  const existing = new Set(it.vars.map((v) => (sizeLabel(v.size || "Standard") + "|" + (v.color || "")).toLowerCase()));
+  const sel = (id, list, cur) => `<select id="${id}">${list.map((x) => `<option ${x === cur ? "selected" : ""}>${esc(x)}</option>`).join("")}<option value="__other">Other…</option></select>`;
+  card.innerHTML = `<h3>Add a color or size</h3><p class="sub"><b>${esc(prod ? prod.name : it.name)}</b>${collName ? " · " + esc(collName) : ""}</p>
+    <p class="sub">On the shelf now: ${it.vars.map((v) => esc(label(v))).join(", ")}</p>
+    <form class="addvar"><div class="srow"><label>Size${sel("avSize", sizes, sizeLabel(v0.size || "Small"))}<input id="avSizeOther" placeholder="Size name" hidden></label>
+    <label>Color${twoColors ? " 1" : ""}${sel("avC1", ["(none)", ...colors], "(none)")}<input id="avC1Other" placeholder="Color name" hidden></label>
+    ${twoColors ? `<label>Color 2${sel("avC2", ["(none)", ...colors], "(none)")}<input id="avC2Other" placeholder="Color name" hidden></label>` : ""}
+    <label>Starting count<input id="avCount" type="number" min="0" max="999" value="0" inputmode="numeric"></label></div>
+    <p class="err" id="avErr"></p><div class="row"><button type="submit" class="btn accent" id="avSave">Add</button><button type="button" class="btn ghost" data-close>Cancel</button></div></form>`;
+  const q = (s) => card.querySelector(s); const err = (t) => { q("#avErr").textContent = t || ""; };
+  card.querySelectorAll("select").forEach((s) => { s.onchange = () => { const o = q("#" + s.id + "Other"); if (o) { o.hidden = s.value !== "__other"; if (!o.hidden) o.focus(); } err(""); }; });
+  q("[data-close]").onclick = m.close;
+  const val = (id) => { const s = q("#" + id); if (!s) return ""; const v = s.value === "__other" ? q("#" + id + "Other").value.trim() : s.value; return v === "(none)" ? "" : v; };
+  q("form").onsubmit = async (e) => {
+    e.preventDefault(); err("");
+    const size = val("avSize"), c1 = val("avC1"), c2 = twoColors ? val("avC2") : ""; const n = Math.max(0, Math.round(Number(q("#avCount").value) || 0));
+    if (!size) return err("Pick or type a size."); if (c2 && !c1) return err("Pick Color 1 first.");
+    const colorLabel = [c1, c2].filter(Boolean).join(" + ");
+    if (existing.has((sizeLabel(size) + "|" + colorLabel).toLowerCase())) return err(`${label({ size, color: colorLabel })} is already on the shelf.`);
+    const isNew = []; if (!sizes.includes(size)) isNew.push("size"); for (const c of [c1, c2]) if (c && !colors.includes(c)) isNew.push("color:" + c);
+    const inventory_name = `${v0.base} (${[size, colorLabel].filter(Boolean).join(", ")})`;
+    const payload = { product: prod ? prod.name : it.name, collection: collName || null, size, color_1: c1 || null, color_2: c2 || null, inventory_name, new: isNew };
+    const btn = q("#avSave"); btn.disabled = true; btn.textContent = "Adding…";
+    let r; try { r = await db.addVariant(payload); } catch (x) { btn.disabled = false; btn.textContent = "Add"; return err(db.errText(x)); }
+    if (n > 0) { try { await db.applyMoves([{ notion_id: r.notion_id, kind: "count", qty: n, reason: "Starting count", ref: "inventory" }]); } catch (x) { await reloadInventory(); render(); btn.disabled = false; btn.textContent = "Add"; return err(`Added ${inventory_name}, but the starting count was not saved: ${db.errText(x)}. Count it from its tile.`); } }
+    m.close(); toast(`Added ${inventory_name}${n ? ` · ${n} on shelf` : ""}${r.created && r.created.length ? ` (new ${r.created.join(", ")})` : ""}`);
+    await reloadInventory(); openV = r.notion_id; render();
+  };
+}
+
 export function init() {
   host = document.getElementById("invHost"); if (!host) return;
   host.innerHTML = `<div class="viewbar"><div class="viewtabs" role="group" aria-label="View"><button type="button" id="mShelf" data-mode="shelf" aria-pressed="true"><span aria-hidden="true">▦</span><span>Shelf view</span></button><button type="button" id="mList" data-mode="list" aria-pressed="false"><span aria-hidden="true">☰</span><span>List view</span></button></div></div>
@@ -116,6 +164,7 @@ export function init() {
     if ((b = t.closest("[data-coll]"))) { coll = b.dataset.coll; render(); return; }
     if ((b = t.closest("[data-lgroup]"))) { LGROUP = b.dataset.lgroup; try { localStorage.setItem("spood.inv.group", LGROUP); } catch (x) {} render(); return; }
     if ((b = t.closest("[data-pmode]"))) { panelMode = b.dataset.pmode; render(); return; }
+    if ((b = t.closest("[data-addvar]"))) { const it = D.ITEMS.find((x) => x.key === b.dataset.addvar); if (it) addVariation(it); return; }
     if ((b = t.closest("[data-v]"))) { openV = b.dataset.v; render(); return; }
     if ((b = t.closest("[data-pstep]"))) { const v = D.V.find((x) => x.id === openV); if (!v) return; setCount(v, Math.max(0, (v.val || 0) + Number(b.dataset.pstep))); render(); return; }
     if ((b = t.closest("[data-cstep]"))) { const v = D.V.find((x) => x.id === b.dataset.id); const inp = host.querySelector("#n-" + CSS.escape(v.id)); const cur = inp && inp.value !== "" ? Number(inp.value) : v.stock || 0; setCount(v, Math.max(0, cur + Number(b.dataset.cstep))); const y = window.scrollY; render(); window.scrollTo(0, y); return; }
