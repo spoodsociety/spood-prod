@@ -500,6 +500,19 @@ const CHANGE = {
   setKeep: (d, el) => dispatch("setKeep", d.group, el.value),
   restockAdd: (d, el) => { const q = host.querySelector("#rq-" + CSS.escape(d.group))?.value; dispatch("restockAdd", d.group, q, el.value); el.value = ""; },
 };
+/* ---------- Bin View → "Add to print queue": the open pieces of these lines go on a printer ---------- */
+export const laneSummary = () => PRINTERS.map((p) => ({ printer: p, queued: sum(state.lanes[p].filter((b) => b.state === B.QUEUED), (b) => b.items.length), printing: state.lanes[p].some((b) => b.state === B.PRINTING) }));
+export function queueLines(lineUids, printer, start) {
+  if (!loaded) throw new Error("The print plan hasn't loaded yet");
+  printer = Number(printer); if (!PRINTERS.includes(printer)) throw new Error("Pick a printer");
+  const covered = coveredPieceIds(); const ids = [...PIECE_BY_ID.values()].filter((p) => lineUids.includes(p.line) && !covered.has(p.id) && !p.onShelf).map((p) => p.id);
+  if (!ids.length) throw new Error("Nothing left to print on these lines (already queued or on the shelf)");
+  const prev = ui.commitMode; ui.commitMode = start ? "new" : "join"; // starting now gets its own batch; just queuing joins the printer's last queued batch
+  try { dispatch("commitPicks", ids.map((id) => [id, printer])); } finally { ui.commitMode = prev; persistUi(); }
+  if (start) { const b = [...state.lanes[printer]].reverse().find((x) => x.state === B.QUEUED && x.items.some((i) => ids.includes(i.uid))); if (b) dispatch("startBatch", b.id); }
+  return ids.length;
+}
+
 export function init() {
   host = document.getElementById("pqHost"); if (!host) return; host.innerHTML = shell();
   host.addEventListener("pointerdown", () => { pointerHeld = true; lastTouch = Date.now(); }, true);
