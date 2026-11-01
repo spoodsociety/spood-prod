@@ -85,21 +85,21 @@ export function render() {
   renderFilters(); if (mode === "shelf") { renderRail(); renderShelf(); } else renderList(); renderPanel();
 }
 let soon = null;
-function softRender() { clearTimeout(soon); const a = document.activeElement; if (a && host.contains(a) && a.tagName === "INPUT") { soon = setTimeout(softRender, 600); return; } render(); }
+function softRender() { clearTimeout(soon); const a = document.activeElement; if (a && host.contains(a) && a.matches("[data-count], #pcount, #q")) { soon = setTimeout(softRender, 600); return; } render(); }
 
 async function saveCounts(ids) {
   const moves = ids.filter((id) => edits.has(id)).map((id) => ({ notion_id: id, kind: "count", qty: edits.get(id), reason: "Shelf count" }));
   if (!moves.length) return; saving = true; render();
   try { const res = await db.applyMoves(moves); for (const m of moves) { edits.delete(m.notion_id); touched.delete(m.notion_id); setErr("inv:" + m.notion_id, ""); } toast(`Saved ${plural(moves.length, "count")}${Array.isArray(res) && res.some((r) => r.status === "duplicate") ? " (some were already recorded)" : ""}`); }
   catch (e) { const t = db.errText(e); for (const m of moves) setErr("inv:" + m.notion_id, t); toast("⚠ Counts not saved: " + t, true); }
-  saving = false; await reloadInventory();
+  saving = false; await reloadInventory(); render();
 }
 async function saveAdjust(v, kind, qty, reason) {
   const n = Math.max(1, Math.min(99, Math.round(Number(qty) || 0))); const signed = kind === "scrap" ? -n : kind === "adjust" ? (/^-/.test(String(qty)) ? -n : n) : n;
   saving = true; render();
   try { await db.applyMoves([{ notion_id: v.id, kind, qty: signed, reason: reason || null, ref: "inventory" }]); setErr("inv:" + v.id, ""); toast(`${v.item} ${label(v)}: ${signed > 0 ? "+" : ""}${signed} recorded`); }
   catch (e) { setErr("inv:" + v.id, db.errText(e)); }
-  saving = false; await reloadInventory();
+  saving = false; await reloadInventory(); render();
 }
 
 export function init() {
