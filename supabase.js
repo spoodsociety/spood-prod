@@ -53,6 +53,10 @@ export const inventoryRows = () => rpc("inventory_rows");
 export const catalogOptions = () => rpc("catalog_options");
 // resolve_lines: what save_order will do with each line text ({text: {status, reason?, sku?, add?}}); read-only
 export const resolveLines = (texts) => rpc("resolve_lines", { p_texts: texts });
+// pick_variant: the catalog item for {product_id, size_code, color_1, color_2, option_code}; make:true creates it when the colorway is offered
+export const pickVariant = (p) => rpc("pick_variant", { p, p_by: me() || null });
+// pick_collection: the lines a collection adds ({collection, form: accessory|enclosure, size, choices}); read-only
+export const pickCollection = (p) => rpc("pick_collection", { p });
 export const updateVariant = async (p) => { const r = await rpc("update_variant", { p }); return Array.isArray(r) ? r[0] : r; };
 export const archiveVariant = (id) => rpc("archive_variant", { p_id: id });
 export const readAppState = (keys = null, known = {}) => rpc("read_app_state", { keys, known });

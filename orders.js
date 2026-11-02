@@ -44,7 +44,8 @@ export const setErr = (key, msg) => { if (msg) store.errs[key] = msg; else delet
 
 export async function load() {
   try {
-    const [orders, inv] = await Promise.all([db.readOrders("all"), db.inventoryRows()]);
+    const [orders, inv, opts] = await Promise.all([db.readOrders("all"), db.inventoryRows(), cat.opts && !cat.stale ? null : db.catalogOptions()]);
+    if (opts) indexCatalog(opts);
     store.orders = Array.isArray(orders) ? orders : [];
     store.inv = Array.isArray(inv) ? inv : [];
     store.invById = new Map(store.inv.map((r) => [r.id, r]));
@@ -58,7 +59,7 @@ export async function reloadOrder(id) {
   catch (e) { store.err = db.errText(e); }
   emit();
 }
-export async function reloadInventory() { try { const inv = await db.inventoryRows(); store.inv = Array.isArray(inv) ? inv : []; store.invById = new Map(store.inv.map((r) => [r.id, r])); recompute(); } catch (e) { store.err = db.errText(e); } emit(); }
+export async function reloadInventory() { try { const [inv, opts] = await Promise.all([db.inventoryRows(), db.catalogOptions()]); indexCatalog(opts); store.inv = Array.isArray(inv) ? inv : []; store.invById = new Map(store.inv.map((r) => [r.id, r])); recompute(); } catch (e) { store.err = db.errText(e); } emit(); }
 
 /* ===================== order & line rules ===================== */
 export const isExpress = (o) => /express/i.test(o.ship_type || "");
@@ -423,41 +424,134 @@ export function custRender() {
   };
 }
 
+/* ===================== catalog: products, sizes, colors, variants (hq.catalog_options) ===================== */
+export const cat = { opts: null, byProduct: new Map(), variants: [], varByKey: new Map(), varByNotion: new Map(), varById: new Map(), schemes: new Map(), colors: new Map(), colls: new Map() };
+const vkey = (p, s, c, o) => [p, s || "standard", c || "standard", o || "standard"].join("|");
+export function indexCatalog(o) {
+  cat.opts = o || {}; cat.stale = false; const P = cat.opts.products || [];
+  cat.byProduct = new Map(P.map((p) => [p.id, p])); cat.schemes = new Map((cat.opts.color_schemes || []).map((s) => [s.id, s]));
+  cat.colors = new Map((cat.opts.colors || []).map((c) => [c.id, c])); cat.colls = new Map((cat.opts.collections || []).map((c) => [c.id, c]));
+  cat.variants = cat.opts.variants || []; cat.varByKey = new Map(); cat.varByNotion = new Map(); cat.varById = new Map();
+  for (const v of cat.variants) { cat.varByKey.set(vkey(v.product_id, v.size_code, v.color_scheme_id, v.option_code), v); if (v.notion_id) cat.varByNotion.set(v.notion_id, v); cat.varById.set(String(v.id), v); }
+}
+export async function loadCatalog(force = false) { if (cat.opts && !force && !cat.stale) return cat.opts; indexCatalog(await db.catalogOptions()); return cat.opts; }
+export const invalidateCatalog = () => { cat.stale = true; };
+const colorName = (id) => (id && cat.colors.get(id) ? cat.colors.get(id).name : id || "");
+const sizeName = (p, code) => { const s = p && (p.size_codes || []).find((x) => x.code === code); return s ? s.name : code ? code[0].toUpperCase() + code.slice(1) : ""; };
+const schemeFor = (c1, c2) => { if (!c1) return "standard"; for (const s of cat.schemes.values()) { if ((s.color_1 === c1 && (s.color_2 || null) === (c2 || null)) || (c2 && s.color_1 === c2 && s.color_2 === c1)) return s.id; } return [c1, c2].filter(Boolean).join("-"); };
+const schemeColors = (id) => { const s = id && cat.schemes.get(id); return s ? { c1: s.color_1 || "", c2: s.color_2 || "" } : !id || id === "standard" ? { c1: "", c2: "" } : (() => { const parts = cat.colors.has(id) ? [id] : [...cat.colors.keys()].filter((k) => id === k || id.startsWith(k + "-") || id.endsWith("-" + k)); return { c1: parts[0] || "", c2: parts[1] || "" }; })(); };
+// colors a product is offered in: the catalog's chart (product_colors) plus every colorway it already has
+function productColors(p) {
+  const s1 = new Set(((p.offered || {})["1"] || [])), s2 = new Set(((p.offered || {})["2"] || []));
+  for (const v of cat.variants) if (v.product_id === p.id && v.color_scheme_id !== "standard") { const c = schemeColors(v.color_scheme_id); if (c.c1) s1.add(c.c1); if (c.c2) s2.add(c.c2); }
+  const any = s1.size || s2.size || p.picks_color;
+  return { any, s1: [...s1], s2: [...s2], two: s2.size > 0 || /floor|insert/i.test(p.category || "") && s1.size > 0 };
+}
+const defaultSize = (p, want) => { const codes = (p.size_codes || []).map((s) => s.code); if (want && codes.includes(want)) return want; return codes[0] || "standard"; };
+// pick line -> what the catalog says (mirrors hq.pick_variant; the server has the last word on save)
+export function pickState(l) {
+  const p = cat.byProduct.get(l.product_id); if (!p) return { status: "unresolved", reason: "no product" };
+  const size = l.size_code || defaultSize(p); if (!(p.size_codes || []).some((s) => s.code === size)) return { status: "unresolved", reason: "size not offered", size };
+  const c1 = l.c1 || "", c2 = l.c2 && l.c2 !== c1 ? l.c2 : ""; const opt = l.option_code || "standard"; let scheme;
+  const pc = productColors(p);
+  if (c1) scheme = schemeFor(c1, c2);
+  else {
+    scheme = p.default_scheme || "";
+    if (!scheme) { const at = [...new Set(cat.variants.filter((v) => v.product_id === p.id && v.size_code === size && v.option_code === opt).map((v) => v.color_scheme_id))];
+      if (at.length === 1) scheme = at[0]; else { const all = [...new Set(cat.variants.filter((v) => v.product_id === p.id && v.option_code === opt).map((v) => v.color_scheme_id))]; if (all.length === 1) scheme = all[0]; else if (p.picks_color || all.length > 1 || pc.s1.length || pc.s2.length) return { status: "unresolved", reason: "needs color" }; else scheme = "standard"; } }
+  }
+  const v = cat.varByKey.get(vkey(p.id, size, scheme, opt));
+  if (v) return { status: "variant", v, name: v.name, size, scheme };
+  if (opt !== "standard") return { status: "unresolved", reason: "option not offered", option: opt };
+  const offered = (id) => pc.s1.includes(id) || pc.s2.includes(id);
+  if (c1 && !(cat.variants.some((x) => x.product_id === p.id && x.color_scheme_id === scheme) || (((p.offered || {})["1"] || []).length + ((p.offered || {})["2"] || []).length > 0 && offered(c1) && (!c2 || offered(c2))))) return { status: "unresolved", reason: "color not offered", size, scheme };
+  const parts = [size !== "standard" ? sizeName(p, size) : "", scheme !== "standard" ? (cat.schemes.get(scheme) || {}).name || [colorName(c1), colorName(c2)].filter(Boolean).join(" + ") : ""].filter(Boolean);
+  const prefix = (cat.variants.find((x) => x.product_id === p.id && x.name && x.name.includes(" (")) || {}).name; const base = prefix ? prefix.split(" (")[0] : (cat.variants.find((x) => x.product_id === p.id) || {}).name || p.name;
+  return { status: "creatable", name: base + (parts.length ? ` (${parts.join(", ")})` : ""), size, scheme };
+}
+const pickWord = (st) => {
+  if (!st) return "";
+  if (st.status === "variant") return ""; if (st.status === "creatable") return "New in the catalog on save";
+  switch (st.reason) { case "needs color": return "Needs a color"; case "color not offered": return "Not offered in that color — add it in Inventory"; case "size not offered": return `Not made in ${st.size}`; case "option not offered": return `No ${st.option} version`; default: return "Not in the catalog"; }
+};
+// a saved order line -> form line (pick when the catalog knows the item, else text)
+function lineFromSaved(l) {
+  const v = (l.notion_inventory_id && cat.varByNotion.get(l.notion_inventory_id)) || (l.variant_id != null && cat.varById.get(String(l.variant_id))) || null;
+  const base = { uid: l.uid, qty: Number(l.qty) || 1, note: l.note || "", group_uid: l.group_uid || null, print_state: l.print_state, packed: l.packed };
+  if (v) { const c = schemeColors(v.color_scheme_id); return { ...base, kind: "pick", product_id: v.product_id, size_code: v.size_code, c1: c.c1, c2: c.c2, option_code: v.option_code || "standard", untracked: false }; }
+  return { ...base, kind: "text", text: cleanText(l.text), inv: l.notion_inventory_id || "", untracked: l.match === "untracked" };
+}
+const pickLine = (product_id, extra = {}) => { const p = cat.byProduct.get(product_id); const d = p && p.default_scheme ? schemeColors(p.default_scheme) : { c1: "", c2: "" }; return { kind: "pick", product_id, size_code: p ? defaultSize(p, extra.size_code) : "standard", c1: d.c1, c2: d.c2, option_code: "standard", qty: 1, note: "", untracked: false, ...extra }; };
+const isEncLine = (l) => (l.kind === "pick" ? l.product_id === "enclosure" : isEncText(l.text));
+
 /* ===================== order form (new / edit) ===================== */
 const PLATFORMS = () => [...new Set(["Etsy", "Shopify", "TikTok", "TikTok - LIVE", "In person", ...store.orders.flatMap((o) => o.platform || [])])];
-const F = { form: null, orig: null, errors: [], review: null, busy: false, focus: null };
-const blank = (pre = {}) => ({ id: null, version: null, customer: "", repeat_customer: false, handle: "", platform: [], order_number: "", shipping_number: "", order_date: isoDay(), ship_by: "", ship_type: "Standard", status: "Not started", important: "", summary: "", state: "", lines: [], ...pre });
-const fromOrder = (o) => ({ id: o.id, version: o.version, customer: o.customer || "", repeat_customer: !!o.repeat_customer, handle: o.handle || "", platform: [...(o.platform || [])], order_number: o.order_number || "", shipping_number: o.shipping_number || "", order_date: o.order_date || "", ship_by: o.ship_by || "", ship_type: o.ship_type || "Standard", status: o.status, important: o.important || "", summary: o.summary || "", state: o.state || "",
-  lines: [...(o.lines || [])].sort((a, b) => a.line_no - b.line_no).map((l) => ({ uid: l.uid, text: cleanText(l.text), qty: Number(l.qty) || 1, inv: l.notion_inventory_id || "", note: l.note || "", untracked: l.match === "untracked", group_uid: l.group_uid || null, print_state: l.print_state, packed: l.packed })) });
+const F = { form: null, orig: null, errors: [], review: null, busy: false, focus: null, custOpen: false };
+const blank = (pre = {}) => ({ id: null, version: null, customer: "", repeat_customer: false, handle: "", platform: [], order_number: "", shipping_number: "", order_date: isoDay(), ship_by: "", ship_type: "Standard", status: "Not started", important: "", summary: "", state: "", collection: "", choices: {}, lines: [], ...pre });
+const fromOrder = (o) => {
+  const lines = [...(o.lines || [])].sort((a, b) => a.line_no - b.line_no).map(lineFromSaved);
+  const coll = (o.collections || []).map((n) => [...cat.colls.values()].find((c) => c.name === n || c.id === n)).filter(Boolean)[0];
+  return { id: o.id, version: o.version, customer: o.customer || "", repeat_customer: !!o.repeat_customer, handle: o.handle || "", platform: [...(o.platform || [])], order_number: o.order_number || "", shipping_number: o.shipping_number || "", order_date: o.order_date || "", ship_by: o.ship_by || "", ship_type: o.ship_type || "Standard", status: o.status, important: o.important || "", summary: o.summary || "", state: o.state || "", collection: coll ? coll.id : "", choices: {}, lines };
+};
 const snap = (f) => JSON.stringify(f);
+const encSize = (f) => { const e = f.lines.find((l) => l.kind === "pick" && l.product_id === "enclosure"); return e ? e.size_code : ""; };
 
 export function openOrderForm(order = null, focusUid = null, pre = null) {
-  F.form = order ? fromOrder(order) : blank(pre || {}); F.orig = snap(F.form); F.errors = []; F.review = null; F.focus = focusUid;
-  $("#odBinsCard").hidden = false; $("#odTitle").textContent = order ? "Edit order · " + order.customer : "New order";
-  formRender(); $("#odBinsCard").scrollIntoView({ behavior: "smooth", block: "start" });
-  setTimeout(() => { const el = focusUid ? $(`#odHost [data-k][data-uid="${focusUid}"] .li-text`) : $("#odHost #fCustomer"); if (el) el.focus(); }, 60);
+  const start = () => {
+    F.form = order ? fromOrder(order) : blank(pre || {}); F.orig = snap(F.form); F.errors = []; F.review = null; F.focus = focusUid; F.custOpen = false;
+    $("#odBinsCard").hidden = false; $("#odTitle").textContent = order ? "Edit order · " + order.customer : "New order";
+    formRender(); $("#odBinsCard").scrollIntoView({ behavior: "smooth", block: "start" });
+    setTimeout(() => { const el = focusUid ? $(`#odHost [data-k][data-uid="${focusUid}"] input`) : $("#odHost #fCustomer"); if (el) el.focus(); }, 60);
+  };
+  if (cat.opts) return start();
+  $("#odBinsCard").hidden = false; $("#odHost").innerHTML = `<div class="empty">Loading the catalog…</div>`;
+  loadCatalog().then(start).catch((e) => { $("#odHost").innerHTML = `<div class="err">⚠ ${esc(db.errText(e))}</div>`; });
 }
 function closeForm() { F.form = null; $("#odBinsCard").hidden = true; $("#odHost").innerHTML = ""; }
 
-function searchInv(q) { const qt = toks(q); if (!qt.length) return []; const out = [];
-  for (const r of store.inv) { const nt = toks(r.item + " " + (r.collection || "")); if (qt.every((w) => nt.some((x) => x.startsWith(w)))) out.push({ r, sc: qt.length / nt.length + (r.in_stock > 0 ? .01 : 0) }); }
-  return out.sort((a, b) => b.sc - a.sc || a.r.item.localeCompare(b.r.item)).slice(0, 14); }
-function matchInv(text) { const t = new Set(toks(text.replace(/\([^)]*\)/g, " "))); let best = null;
-  for (const r of store.inv) { const nt = toks(r.item).filter((w) => !["the", "a", "and", "set", "hide", "piece"].includes(w)); if (!nt.length) continue; const hit = nt.filter((w) => t.has(w)).length; const sc = hit / nt.length + (hit === nt.length ? 1 : 0) - (nt.length - hit) * .05; if (!best || sc > best.sc) best = { r, sc, full: hit === nt.length }; }
-  return best && best.sc >= 0.5 ? best : null; }
+// search for the "Add an item" box: every typed word must start a word of the product's name, an alias, its category or collection
+function searchProducts(q) { const qt = toks(q); if (!qt.length) return []; const out = [];
+  for (const p of cat.opts.products || []) { if (p.archived) continue; const names = [p.name, ...(p.aliases || [])]; const collN = (p.collections || []).map((id) => (cat.colls.get(id) || {}).name || "").join(" ");
+    let best = 0; for (const nm of names) { const nt = toks(nm + " " + (p.category || "") + " " + collN); if (qt.every((w) => nt.some((x) => x.startsWith(w)))) best = Math.max(best, qt.length / nt.length); }
+    if (best) out.push({ p, sc: best }); }
+  return out.sort((a, b) => b.sc - a.sc || a.p.name.localeCompare(b.p.name)).slice(0, 12); }
+const stockOf = (st) => { const v = st && st.v; const r = v && v.notion_id ? store.invById.get(v.notion_id) : null; return r ? (r.in_stock != null ? `${r.in_stock} on shelf` : "not tracked") : ""; };
 
-/* What the database will do with a free-text line on save (hq.resolve_lines). Cached by text; patched into the row in place. */
+function lineRowHtml(l, i) {
+  const q = Number(l.qty) || 1; const state = l.print_state ? ` · <b>${esc(LAB[l.print_state] || l.print_state)}</b>` : ""; const packed = l.packed ? " · packed" : "";
+  const noteIn = `<input class="li-note" data-l="${i}" data-lf="note" value="${esc(l.note || "")}" autocomplete="off" aria-label="Note for item ${i + 1}" placeholder="${l.kind === "pick" && l.size_code === "custom" ? "W × L in" : "Notes"}">`;
+  const del = `<button type="button" class="x" data-del="${i}" aria-label="Remove item ${i + 1}">✕</button>`;
+  if (l.kind === "pick") {
+    const p = cat.byProduct.get(l.product_id); const st = pickState(l); const pc = p ? productColors(p) : { any: false, s1: [], s2: [] };
+    const sizes = p ? p.size_codes || [] : [];
+    const sizeSel = sizes.length > 1 ? `<select data-l="${i}" data-lf="size_code" aria-label="Size">${sizes.map((s) => `<option value="${esc(s.code)}" ${s.code === l.size_code ? "selected" : ""}>${esc(s.name)}</option>`).join("")}</select>` : `<span class="na">One size</span>`;
+    const opt = (ids, cur) => `<option value="">—</option>${ids.map((id) => `<option value="${esc(id)}" ${id === cur ? "selected" : ""}>${esc(colorName(id))}</option>`).join("")}`;
+    const others = (ids, cur) => { const rest = [...cat.colors.values()].filter((c) => !ids.includes(c.id)); return rest.length ? `<optgroup label="Other colors">${rest.map((c) => `<option value="${esc(c.id)}" ${c.id === cur ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</optgroup>` : ""; };
+    const colorSel = !pc.any ? `<span class="na">One color</span>` : `<div class="colorpair"><select data-l="${i}" data-lf="c1" aria-label="Color 1">${opt(pc.s1, l.c1)}${others(pc.s1, l.c1)}</select>${pc.two ? `<select data-l="${i}" data-lf="c2" aria-label="Color 2">${opt(pc.s2, l.c2)}${others(pc.s2, l.c2)}</select>` : ""}</div>`;
+    const word = pickWord(st); const ok = st.status === "variant" || st.status === "creatable";
+    const small = [p && p.collections && p.collections.length ? esc((cat.colls.get(p.collections[0]) || {}).name || "") : "", esc(stockOf(st)), l.option_code && l.option_code !== "standard" ? esc(l.option_code) : "", l.src ? esc({ collection: "from collection", addon: "add-on", repeat: "from a past order", paste: "pasted" }[l.src] || "") : ""].filter(Boolean).join(" · ");
+    return `<div class="line pick" data-k="${i}" ${l.uid ? `data-uid="${l.uid}"` : ""}><div class="nm"><span class="pname">${esc(p ? p.name : l.product_id)}</span><small>${small}${state}${packed}</small>${word ? `<span class="flag${ok ? " ok" : ""}">${esc(word)}</span>${st.reason === "color not offered" ? `<button type="button" class="btn ghost mini" data-addcat="${i}">Add to catalog</button>` : ""}` : ""}</div>
+      <input type="number" min="1" max="99" value="${q}" data-l="${i}" data-lf="qty" aria-label="Quantity">
+      <div class="szc">${sizeSel}</div><div class="clc">${colorSel}</div><div class="ntc">${noteIn}</div>${del}</div>`;
+  }
+  const x = RES.get((l.text || "").trim());
+  const flag = l.untracked ? `<span class="flag ok">Not tracked</span>` : isEncText(l.text) ? `<span class="flag ok">Enclosure heading</span>` : `<span class="flag${x && ["variant", "creatable", "untracked"].includes(x.status) ? " ok" : ""}">${esc(resolveWord(x))}</span>${x && x.status !== "variant" ? `<button type="button" class="btn ghost mini" data-addcat="${i}">Add to catalog</button>` : ""}`;
+  return `<div class="line text" data-k="${i}" ${l.uid ? `data-uid="${l.uid}"` : ""}><div class="nm ta"><input class="li-text" data-l="${i}" data-lf="text" value="${esc(l.text)}" autocomplete="off" aria-label="Item ${i + 1}" placeholder="Item as written"><div class="ta-list" hidden></div><small>Not a catalog item${state}${packed}</small>${flag}</div>
+    <input type="number" min="1" max="99" value="${q}" data-l="${i}" data-lf="qty" aria-label="Quantity">
+    <div class="szc"><label class="utk"><input type="checkbox" data-l="${i}" data-lf="untracked" ${l.untracked ? "checked" : ""}> Not tracked</label></div><div class="clc"></div><div class="ntc">${noteIn}</div>${del}</div>`;
+}
+
+/* What the database will do with a free-text line on save (hq.resolve_lines). Cached by text. */
 const RES = new Map();
 const resolveWord = (x) => {
   if (!x) return "Checking…";
   if (x.status === "variant") return "✓ Matches on save";
-  if (x.status === "creatable") return "✓ Added to the catalog on save";
+  if (x.status === "creatable") return "New in the catalog on save";
   if (x.status === "untracked") return "Not tracked";
   if (x.status === "heading") return "Enclosure heading";
-  const p = x.add && x.add.product ? x.add.product : "";
   switch (x.reason) {
     case "needs color": return "Needs a color";
-    case "color not offered": return `${p || "This piece"} isn't offered in ${[x.add && x.add.color_1, x.add && x.add.color_2].filter(Boolean).join(" + ") || "that color"} — add it in Inventory`;
+    case "color not offered": return "Not offered in that color — add it in Inventory";
     case "unknown color": return `Unknown color: ${(x.unknown || []).join(", ")}`;
     case "size not offered": return `Not made in ${x.size || "that size"}`;
     case "ambiguous product": return "Which piece? Pick one";
@@ -467,46 +561,60 @@ const resolveWord = (x) => {
 };
 function resolvePending(host) {
   const f = F.form; if (!f) return;
-  const todo = [...new Set(f.lines.filter((l) => !l.inv && !l.untracked && !isEncText(l.text) && l.text.trim() && !RES.has(l.text.trim())).map((l) => l.text.trim()))];
-  const paint = () => { if (F.form !== f) return; host.querySelectorAll("[data-k]").forEach((row) => { const l = f.lines[+row.dataset.k]; const el = row.querySelector(".flag"); if (!l || !el) return; const x = RES.get(l.text.trim()); el.textContent = resolveWord(x); const ok = !!x && ["variant", "creatable", "untracked"].includes(x.status); el.classList.toggle("ok", ok); const ab = row.querySelector("[data-addcat]"); if (ab) ab.hidden = ok || !x; }); };
-  if (!todo.length) { paint(); return; }
-  db.resolveLines(todo).then((res) => { for (const t of todo) RES.set(t, (res && res[t]) || { status: "unresolved" }); paint(); }).catch(() => { for (const t of todo) RES.set(t, { status: "unresolved" }); paint(); });
+  const todo = [...new Set(f.lines.filter((l) => l.kind === "text" && !l.untracked && !isEncText(l.text) && (l.text || "").trim() && !RES.has(l.text.trim())).map((l) => l.text.trim()))];
+  if (!todo.length) return;
+  db.resolveLines(todo).then((res) => { for (const t of todo) RES.set(t, (res && res[t]) || { status: "unresolved" }); if (F.form === f) formRender(); }).catch(() => { for (const t of todo) RES.set(t, { status: "unresolved" }); if (F.form === f) formRender(); });
 }
-function lineRowHtml(l, i) {
-  const r = l.inv ? store.invById.get(l.inv) : null; const q = Number(l.qty) || 1;
-  const flag = r ? `<small>${esc(r.collection || "")}${r.in_stock != null ? ` · ${r.in_stock} on shelf` : " · not tracked"}${l.print_state ? ` · <b>${esc(LAB[l.print_state] || l.print_state)}</b>` : ""}${l.packed ? " · packed" : ""}</small>` : l.untracked ? `<small>Not tracked (plants, extras)</small>` : isEncText(l.text) ? `<small>Enclosure heading</small>` : `<small><span class="flag">${esc(resolveWord(RES.get(l.text.trim())))}</span>${(() => { const m = matchInv(l.text); return m ? ` <button type="button" class="btn ghost mini" data-use="${i}" data-inv="${m.r.id}">Use “${esc(m.r.item)}”</button>` : ""; })()}<button type="button" class="btn ghost mini" data-addcat="${i}">Add to catalog</button></small>`;
-  return `<div class="line" data-k="${i}" ${l.uid ? `data-uid="${l.uid}"` : ""}><div class="nm ta"><input class="li-text" data-l="${i}" data-lf="text" value="${esc(l.text)}" autocomplete="off" aria-label="Item ${i + 1}" placeholder="Type an item name"><div class="ta-list" hidden></div><input class="li-note" data-l="${i}" data-lf="note" value="${esc(l.note || "")}" autocomplete="off" aria-label="Note for item ${i + 1}" placeholder="Note"><div class="nmflag">${flag}</div></div>
-    <input type="number" min="1" max="99" value="${q}" data-l="${i}" data-lf="qty" aria-label="Quantity">
-    <div class="szc"><label class="utk"><input type="checkbox" data-l="${i}" data-lf="untracked" ${l.untracked ? "checked" : ""}> Not tracked</label></div>
-    <button type="button" class="x" data-del="${i}" aria-label="Remove item ${i + 1}">✕</button></div>`;
+
+function custCard(f, custs) {
+  const n = normName(f.customer); if (!n) return "";
+  const c = custs.find((x) => x.key === n || [...x.handles].some((h) => normName(h) === n));
+  if (!c) return `<div class="custcard"><span class="chip">New customer</span></div>`;
+  const past = c.orders.filter((o) => o.id !== f.id);
+  const items = (o) => (o.lines || []).slice().sort((a, b) => a.line_no - b.line_no).map((l) => `${Number(l.qty) > 1 ? l.qty + "× " : ""}${esc(cleanText(l.text))}`).join("<br>");
+  return `<div class="custcard"><div class="row"><div><b>${esc(c.name)}</b><div class="sub">${plural(past.length, "past order")}${c.states.size ? " · " + esc([...c.states].join(", ")) : ""}${c.handles.size ? " · " + esc([...c.handles].join(", ")) : ""}${[...c.platforms].length ? " · " + esc([...c.platforms].join(", ")) : ""}</div></div></div>
+    ${past.length ? `<details class="more" ${F.custOpen ? "open" : ""} data-custfold><summary>Past orders (${past.length})</summary><div class="tw"><table class="t"><thead><tr><th>Ship by</th><th>Platform</th><th>Items</th><th></th></tr></thead><tbody>${past.slice(0, 5).map((o) => `<tr><td>${esc(fmtDay(o.ship_by))}${o.order_number ? `<br><span class="sub mono">#${esc(o.order_number)}</span>` : ""}</td><td>${(o.platform || []).map(esc).join(", ")}</td><td>${items(o)}</td><td><button type="button" class="btn ghost mini" data-reorder="${esc(o.id)}">Use these items</button></td></tr>`).join("")}</tbody></table></div>${past.length > 5 ? `<div class="sub">${past.length - 5} older on the Customers tab.</div>` : ""}</details>` : ""}</div>`;
 }
+
 function formRender() {
   const f = F.form; if (!f) return; const host = $("#odHost");
   const plats = PLATFORMS(); const custs = customers();
   const pieces = f.lines.reduce((a, l) => a + (Number(l.qty) || 1), 0);
+  const enc = encSize(f); const encP = cat.byProduct.get("enclosure"); const encSizes = encP ? encP.size_codes || [] : [];
+  const colls = [...cat.colls.values()].filter((c) => !c.archived).sort((a, b) => a.name.localeCompare(b.name));
+  const coll = f.collection ? cat.colls.get(f.collection) : null;
+  const choices = coll ? (enc ? coll.enclosure_choices : coll.choices) || {} : {};
+  const addons = (cat.opts.products || []).filter((p) => /^(Add-on|Kit|Supply)$/.test(p.category || "")).sort((a, b) => a.name.localeCompare(b.name));
   host.innerHTML = `<div class="od">
     <div class="grid2">
-      <div class="ta"><label class="f">Customer<input id="fCustomer" data-f="customer" value="${esc(f.customer)}" autocomplete="off" placeholder="Name"></label><div class="ta-list" hidden></div></div>
-      <label class="f">Handle <span class="opt">(optional)</span><input data-f="handle" value="${esc(f.handle)}" autocomplete="off" placeholder="@username"></label>
+      <div class="ta"><label class="f">Customer<input id="fCustomer" data-f="customer" value="${esc(f.customer)}" autocomplete="off" placeholder="Name or handle"></label><div class="ta-list" hidden></div></div>
       <label class="f">Order # <span class="opt">(optional)</span><input data-f="order_number" value="${esc(f.order_number)}" autocomplete="off"></label>
-      <label class="f">State <span class="opt">(optional)</span><input data-f="state" value="${esc(f.state)}" autocomplete="off" placeholder="AL"></label>
-    </div>
-    <div><div class="sub" style="margin-bottom:6px;font-weight:700">Platform <span class="opt" style="font-weight:500">(required)</span></div><div class="pills${!f.platform.length && F.errors.some((x) => /platform/i.test(x)) ? " srcmiss" : ""}" role="group" aria-label="Platform">${plats.map((p) => `<button type="button" data-plat="${esc(p)}" aria-pressed="${f.platform.includes(p)}">${esc(p)}</button>`).join("")}</div></div>
-    <div class="grid2">
-      <label class="f">Order date<input type="date" data-f="order_date" value="${esc(f.order_date)}"></label>
       <label class="f">Ship by<input type="date" data-f="ship_by" value="${esc(f.ship_by)}"></label>
+    </div>
+    <div id="odCust">${custCard(f, custs)}</div>
+    <div><div class="lbl">Platform <span class="opt">(required)</span></div><div class="pills${!f.platform.length && F.errors.some((x) => /platform/i.test(x)) ? " srcmiss" : ""}" role="group" aria-label="Platform">${plats.map((p) => `<button type="button" data-plat="${esc(p)}" aria-pressed="${f.platform.includes(p)}">${esc(p)}</button>`).join("")}</div></div>
+    <div class="grid2">
+      <label class="f">Handle <span class="opt">(optional)</span><input data-f="handle" value="${esc(f.handle)}" autocomplete="off" placeholder="@username"></label>
+      <label class="f">State <span class="opt">(optional)</span><input data-f="state" value="${esc(f.state)}" autocomplete="off" placeholder="AL"></label>
+      <label class="f">Order date<input type="date" data-f="order_date" value="${esc(f.order_date)}"></label>
       <label class="f">Shipping<select data-f="ship_type"><option ${f.ship_type === "Standard" ? "selected" : ""}>Standard</option><option ${f.ship_type === "Express" ? "selected" : ""}>Express</option></select></label>
       <label class="f">Shipping # <span class="opt">(optional)</span><input data-f="shipping_number" value="${esc(f.shipping_number)}" autocomplete="off"></label>
+      <label class="utk" style="align-self:end;padding-bottom:12px"><input type="checkbox" data-f="repeat_customer" ${f.repeat_customer ? "checked" : ""}> Repeat customer</label>
     </div>
     <div class="grid2">
       <label class="f">Important <span class="opt">(shows in red on the card)</span><input data-f="important" value="${esc(f.important)}" autocomplete="off"></label>
       <label class="f">Notes <span class="opt">(optional)</span><input data-f="summary" value="${esc(f.summary)}" autocomplete="off"></label>
-      <label class="utk" style="align-self:end;padding-bottom:12px"><input type="checkbox" data-f="repeat_customer" ${f.repeat_customer ? "checked" : ""}> Repeat customer</label>
     </div>
+    ${encSizes.length ? `<div><div class="lbl">Enclosure</div><div class="seg" role="group" aria-label="Enclosure"><button type="button" data-enc="" aria-pressed="${!enc}">None</button>${encSizes.map((s) => `<button type="button" data-enc="${esc(s.code)}" aria-pressed="${enc === s.code}">${esc(s.name)}</button>`).join("")}</div></div>` : ""}
+    <div class="grid2">
+      <label class="f">Collection<select data-f="collection"><option value="">None</option>${colls.map((c) => `<option value="${esc(c.id)}" ${c.id === f.collection ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label>
+      ${Object.keys(choices).map((k) => `<div><div class="lbl">${esc(k)}</div><div class="pills">${(choices[k] || []).map((o) => `<button type="button" data-choice="${esc(k)}" data-opt="${esc(o)}" aria-pressed="${(f.choices[k] || (coll.defaults || {})[k]) === o}">${esc(o)}</button>`).join("")}</div></div>`).join("")}
+    </div>
+    ${addons.length ? `<div><div class="lbl">Add-ons</div><div class="pills">${addons.map((p) => `<button type="button" class="add" data-addon="${esc(p.id)}">${esc(p.name)}</button>`).join("")}</div></div>` : ""}
     <div class="row"><h3>Items <span class="sub">(${plural(pieces, "piece")})</span></h3>${f.lines.length ? `<button type="button" class="btn ghost mini" data-act="clearItems">Clear items</button>` : ""}</div>
-    ${f.lines.length ? `<div class="lhead" aria-hidden="true"><span>Item</span><span>Qty</span><span></span><span></span></div>` : ""}
-    <div class="lines">${f.lines.map(lineRowHtml).join("") || `<div class="empty">No items yet. Search below, or paste a list.</div>`}</div>
-    <div class="ta"><label class="f">Add an item<input id="addItem" autocomplete="off" placeholder="Type a name, e.g. web climb — or press Enter to add it as written"></label><div class="ta-list" hidden></div></div>
+    ${f.lines.length ? `<div class="lhead" aria-hidden="true"><span>Item</span><span>Qty</span><span>Size</span><span>Color</span><span>Notes</span><span></span></div>` : ""}
+    <div class="lines">${f.lines.map(lineRowHtml).join("") || `<div class="empty">No items yet. Pick a collection, an enclosure, an add-on, or search below.</div>`}</div>
+    <div class="ta"><label class="f">Add an item<input id="addItem" autocomplete="off" placeholder="Type a name, e.g. web climb"></label><div class="ta-list" hidden></div></div>
     <details class="more" ${F.review ? "open" : ""}><summary>Paste a list instead</summary>${pasteHtml()}</details>
     <div class="savebar"><div class="errors">${F.errors.map((e) => `<span>${esc(e)}</span>`).join("") || `<span class="sub" style="color:var(--muted);font-weight:500">${f.id ? "Lines keep their printing and packed checks." : "Shelf stock is handed out by ship date; the rest shows as needs printing."}</span>`}</div>
       <button type="button" class="btn ghost" data-act="cancel">Cancel</button><button type="button" class="btn accent" data-act="save" ${F.busy ? "disabled" : ""}>${F.busy ? "Saving…" : f.id ? "Save changes" : "Save order"}</button></div>
@@ -516,26 +624,51 @@ function formRender() {
 }
 function pasteHtml() {
   const r = F.review;
-  if (!r) return `<p class="sub" style="margin-top:0">One item per line. "2x Ghost Hide" or "2 Ghost Hide" sets a quantity.</p><label class="f">Pasted list<textarea id="pasteText" placeholder="2x Ghost Hide&#10;Coffin Hide - Black&#10;Floor Insert - Checkered, Small"></textarea></label><div class="row" style="justify-content:flex-start"><button type="button" class="btn mini" data-act="reviewPaste">Review list</button></div>`;
-  return `<div class="rev">${r.lines.map((l, i) => `<div class="revline"><div class="orig">${esc(l.raw)}</div><input type="number" min="1" max="99" value="${l.qty}" data-r="${i}" data-rf="qty" aria-label="Quantity"><div><select data-r="${i}" data-rf="inv" aria-label="Catalog item"><option value="">Keep as written (not in catalog)</option>${l.cands.map((c) => `<option value="${c.id}" ${c.id === l.inv ? "selected" : ""}>${esc(c.item)}</option>`).join("")}</select>${l.flags.map((x) => `<div class="flag${/no match/i.test(x) ? " bad" : ""}">⚠ ${esc(x)}</div>`).join("")}</div><label class="utk"><input type="checkbox" data-r="${i}" data-rf="untracked" ${l.untracked ? "checked" : ""}> Not tracked</label><button type="button" class="x" data-rdel="${i}" aria-label="Drop this line">✕</button></div>`).join("")}
+  if (!r) return `<p class="sub" style="margin-top:0">One item per line. "2x Ghost Hide" or "2 Ghost Hide" sets a quantity.</p><label class="f">Pasted list<textarea id="pasteText" placeholder="2x Ghost Hide&#10;Coffin Hide - Black&#10;Floor Insert - Checkered, Small"></textarea></label><div class="row" style="justify-content:flex-start"><button type="button" class="btn mini" data-act="reviewPaste" ${F.busy ? "disabled" : ""}>${F.busy ? "Checking…" : "Review list"}</button></div>`;
+  return `<div class="rev">${r.lines.map((l, i) => { const st = l.line.kind === "pick" ? pickState(l.line) : null; const word = l.line.kind === "pick" ? (st.status === "variant" ? "✓ " + st.name : pickWord(st)) : l.line.untracked ? "Not tracked" : resolveWord(RES.get(l.line.text.trim()));
+    return `<div class="revline"><div class="orig">${esc(l.raw)}</div><input type="number" min="1" max="99" value="${l.line.qty}" data-r="${i}" data-rf="qty" aria-label="Quantity"><div class="flag${/✓|Not tracked|New in/.test(word) ? " ok" : " bad"}">${esc(word)}</div><button type="button" class="x" data-rdel="${i}" aria-label="Drop this line">✕</button></div>`; }).join("")}
     <div class="row" style="justify-content:flex-start"><button type="button" class="btn accent mini" data-act="importPaste">Add these to the order</button><button type="button" class="btn ghost mini" data-act="editPaste">Edit the text</button></div></div>`;
 }
-function reviewPaste(text) {
-  const lines = String(text || "").split(/\r?\n/).map((x) => x.trim()).filter(Boolean).map((raw) => {
-    let s = cleanText(raw), qty = 1, m;
+// a resolve_lines verdict -> form line
+function lineFromResolved(text, qty, x) {
+  if (x && x.status === "variant" && cat.varById.get(String(x.variant_id))) { const v = cat.varById.get(String(x.variant_id)); const c = schemeColors(v.color_scheme_id); return { kind: "pick", product_id: v.product_id, size_code: v.size_code, c1: c.c1, c2: c.c2, option_code: v.option_code || "standard", qty, note: "", untracked: false, src: "paste" }; }
+  if (x && x.product_id && cat.byProduct.get(x.product_id)) { const a = x.add || {}; const byName = (nm) => { const k = normName(nm); const c = nm && [...cat.colors.values()].find((c) => normName(c.name) === k || (c.aliases || []).some((al) => normName(al) === k)); return c ? c.id : ""; };
+    const c = x.color_scheme_id && cat.schemes.get(x.color_scheme_id) ? schemeColors(x.color_scheme_id) : { c1: byName(a.color_1), c2: byName(a.color_2) };
+    return { ...pickLine(x.product_id, { size_code: x.size_code }), c1: c.c1, c2: c.c2, qty, src: "paste" }; }
+  return { kind: "text", text, qty, note: "", untracked: !!(x && x.status === "untracked") || (/\bplants?\b|cocoon|substrate|moss/i.test(text) && !(x && x.status === "variant")), src: "paste" };
+}
+async function reviewPaste(text) {
+  const raws = String(text || "").split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+  const parsed = raws.map((raw) => { let s = cleanText(raw), qty = 1, m;
     if ((m = s.match(/^(\d{1,3})\s*[x×]\s*/i)) || (m = s.match(/^(\d{1,3})\s+(?=[a-z])/i))) { qty = +m[1]; s = s.slice(m[0].length); }
     else if ((m = s.match(/\s*[x×]\s*(\d{1,3})\s*$/i))) { qty = +m[1]; s = s.slice(0, m.index).trim(); }
-    const t = new Set(toks(s.replace(/\([^)]*\)/g, " "))); const cands = [];
-    for (const r of store.inv) { const nt = toks(r.item).filter((w) => !["the", "a", "and", "set", "hide", "piece"].includes(w)); if (!nt.length) continue; const hit = nt.filter((w) => t.has(w)).length; const sc = hit / nt.length + (hit === nt.length ? 1 : 0); if (sc >= 0.5) cands.push({ id: r.id, item: r.item, sc }); }
-    cands.sort((a, b) => b.sc - a.sc); const top = cands[0]; const flags = [];
-    let inv = ""; if (top && top.sc >= 1) { const ties = cands.filter((c) => c.sc >= top.sc - .001); if (ties.length === 1) inv = top.id; else flags.push("Matches more than one item: pick one"); } else flags.push(cands.length ? "No exact match; pick the item or keep as written" : "No match in the catalog");
-    return { raw, text: s, qty, inv, cands: cands.slice(0, 6), untracked: /\bplants?\b|cocoon|substrate|moss/i.test(s) && !inv, flags };
-  });
-  F.review = { text, lines };
+    return { raw, text: s, qty }; });
+  const todo = [...new Set(parsed.map((p) => p.text).filter((t) => t && !RES.has(t)))];
+  if (todo.length) { try { const res = await db.resolveLines(todo); for (const t of todo) RES.set(t, (res && res[t]) || { status: "unresolved" }); } catch (e) { for (const t of todo) RES.set(t, { status: "unresolved" }); toast(db.errText(e), true); } }
+  F.review = { text, lines: parsed.map((p) => ({ raw: p.raw, line: lineFromResolved(p.text, p.qty, RES.get(p.text)) })) };
 }
+// the collection's pieces as form lines (hq.pick_collection); the enclosure line is kept in step with the Enclosure switch
+async function applyCollection(f) {
+  const coll = f.collection ? cat.colls.get(f.collection) : null; if (!coll) return;
+  const enc = encSize(f); const form = enc && coll.sells_enclosure ? "enclosure" : coll.sells_accessory_set ? "accessory" : "enclosure";
+  const choices = { ...(form === "enclosure" ? coll.defaults || {} : {}), ...f.choices };
+  const res = await db.pickCollection({ collection: coll.id, form, size: enc || undefined, choices });
+  const fresh = (res.lines || []).map((x) => { const c = x.color_scheme_id ? schemeColors(x.color_scheme_id) : { c1: "", c2: "" }; return { kind: "pick", product_id: x.product_id, size_code: x.size || (x.product_id === "enclosure" ? enc : undefined), c1: c.c1, c2: c.c2, option_code: x.option || "standard", qty: Number(x.qty) || 1, note: "", untracked: false, src: x.product_id === "enclosure" ? "enclosure" : "collection" }; })
+    .map((l) => ({ ...l, size_code: l.size_code || defaultSize(cat.byProduct.get(l.product_id) || {}, enc) }));
+  const kept = f.lines.filter((l) => l.src !== "collection" && !(l.kind === "pick" && l.product_id === "enclosure" && fresh.some((x) => x.product_id === "enclosure")));
+  if (form === "enclosure" && enc && !fresh.some((x) => x.product_id === "enclosure")) fresh.unshift(pickLine("enclosure", { size_code: enc, src: "enclosure" }));
+  f.lines = [...fresh.filter((x) => x.product_id === "enclosure"), ...kept.filter(isEncLine), ...fresh.filter((x) => x.product_id !== "enclosure"), ...kept.filter((l) => !isEncLine(l))];
+}
+function setEnclosure(f, size) {
+  const i = f.lines.findIndex((l) => l.kind === "pick" && l.product_id === "enclosure");
+  if (!size) { if (i >= 0) f.lines.splice(i, 1); return; }
+  if (i >= 0) f.lines[i].size_code = size; else f.lines.unshift(pickLine("enclosure", { size_code: size, src: "enclosure" }));
+  for (const l of f.lines) if (l.kind === "pick" && l.product_id !== "enclosure") { const p = cat.byProduct.get(l.product_id); if (p && (p.size_codes || []).some((s) => s.code === size) && l.size_code !== "custom") l.size_code = size; }
+}
+
 function wireForm(host, custs) {
   const f = F.form;
-  const read = () => { host.querySelectorAll("[data-f]").forEach((el) => { const k = el.dataset.f; f[k] = el.type === "checkbox" ? el.checked : el.value; }); host.querySelectorAll("[data-l]").forEach((el) => { const l = f.lines[+el.dataset.l]; if (!l) return; const k = el.dataset.lf; if (k === "qty") l.qty = Math.max(1, Math.min(99, Math.floor(+el.value) || 1)); else if (k === "untracked") l.untracked = el.checked; else if (k === "note") l.note = el.value; else if (k === "text") { if (l.text !== el.value) { l.text = el.value; const r = l.inv && store.invById.get(l.inv); if (r && r.item !== el.value) l.inv = ""; } } }); };
+  const read = () => { host.querySelectorAll("[data-f]").forEach((el) => { const k = el.dataset.f; f[k] = el.type === "checkbox" ? el.checked : el.value; }); host.querySelectorAll("[data-l]").forEach((el) => { const l = f.lines[+el.dataset.l]; if (!l) return; const k = el.dataset.lf; if (k === "qty") l.qty = Math.max(1, Math.min(99, Math.floor(+el.value) || 1)); else if (k === "untracked") l.untracked = el.checked; else if (k === "note") l.note = el.value; else if (k === "text") { l.text = el.value; } else l[k] = el.value; }); };
   // typeahead
   const ta = (input, list, items, pick) => {
     const show = () => { const q = input.value.trim(); const hits = q ? items(q) : []; if (!hits.length) { list.hidden = true; return; } list.innerHTML = hits.map((h, i) => `<button type="button" data-i="${i}" class="${i === 0 ? "on" : ""}">${h.html}</button>`).join(""); list.hidden = false; list._hits = hits; };
@@ -545,61 +678,89 @@ function wireForm(host, custs) {
     input.addEventListener("blur", () => setTimeout(() => { list.hidden = true; }, 120));
   };
   const cIn = host.querySelector("#fCustomer");
-  if (cIn) ta(cIn, cIn.closest(".ta").querySelector(".ta-list"), (q) => { const n = normName(q); return custs.filter((c) => normName([c.name, ...c.handles].join(" ")).includes(n)).slice(0, 8).map((c) => ({ c, html: `<span><b>${esc(c.name)}</b>${c.handles.size ? ` <span class="sub">${esc([...c.handles].join(", "))}</span>` : ""}</span><span class="sub">${plural(c.orders.length, "order")}${c.states.size ? " · " + esc([...c.states][0]) : ""}</span>` })); }, (h) => { read(); f.customer = h.c.name; f.repeat_customer = true; if (!f.platform.length && h.c.last.platform) f.platform = [...h.c.last.platform]; if (!f.state) f.state = [...h.c.states][0] || ""; if (!f.handle) f.handle = [...h.c.handles][0] || ""; formRender(); });
-  const invHits = (q) => searchInv(q).map((h) => ({ r: h.r, html: `<span>${esc(h.r.item)}</span><span class="sub">${esc(h.r.collection || "")}${h.r.in_stock != null ? ` · ${h.r.in_stock} on shelf` : ""}</span>` }));
+  if (cIn) { ta(cIn, cIn.closest(".ta").querySelector(".ta-list"), (q) => { const n = normName(q); if (custs.some((c) => c.key === n)) return []; return custs.filter((c) => normName([c.name, ...c.handles].join(" ")).includes(n)).slice(0, 8).map((c) => ({ c, html: `<span><b>${esc(c.name)}</b>${c.handles.size ? ` <span class="sub">${esc([...c.handles].join(", "))}</span>` : ""}</span><span class="sub">${plural(c.orders.length, "order")}${c.states.size ? " · " + esc([...c.states][0]) : ""}</span>` })); }, (h) => { read(); f.customer = h.c.name; f.repeat_customer = true; if (!f.platform.length && h.c.last.platform) f.platform = [...h.c.last.platform]; if (!f.state) f.state = [...h.c.states][0] || ""; if (!f.handle) f.handle = [...h.c.handles][0] || ""; formRender(); });
+    cIn.addEventListener("input", () => { f.customer = cIn.value; const c = host.querySelector("#odCust"); if (c) c.innerHTML = custCard(f, custs); }); }
+  const prodHits = (q) => searchProducts(q).map((h) => ({ p: h.p, html: `<span>${esc(h.p.name)}</span><span class="sub">${esc(h.p.category || "")}${h.p.collections && h.p.collections.length ? " · " + esc(h.p.collections.map((id) => (cat.colls.get(id) || {}).name || id).join(", ")) : ""}</span>` }));
   const addIn = host.querySelector("#addItem");
-  const addLine = (text, inv) => { read(); f.lines.push({ text, qty: 1, inv: inv || "", untracked: false }); formRender(); setTimeout(() => { const el = $("#odHost #addItem"); if (el) el.focus(); }, 30); };
-  ta(addIn, addIn.closest(".ta").querySelector(".ta-list"), invHits, (h) => addLine(h.r.item, h.r.id));
-  addIn.addEventListener("keydown", (e) => { if (e.key === "Enter" && addIn.value.trim() && (addIn.closest(".ta").querySelector(".ta-list").hidden)) { e.preventDefault(); addLine(addIn.value.trim(), ""); } });
-  host.querySelectorAll(".li-text").forEach((inp) => ta(inp, inp.closest(".ta").querySelector(".ta-list"), invHits, (h) => { read(); const l = f.lines[+inp.dataset.l]; l.text = h.r.item; l.inv = h.r.id; l.untracked = false; formRender(); }));
-  host.onchange = (e) => { const t = e.target; if (t.matches("[data-f],[data-l]")) { read(); if (t.dataset.lf === "text" || t.dataset.lf === "untracked") formRender(); } if (t.matches("[data-r]")) { const l = F.review.lines[+t.dataset.r]; const k = t.dataset.rf; if (k === "qty") l.qty = Math.max(1, +t.value || 1); else if (k === "inv") l.inv = t.value; else if (k === "untracked") l.untracked = t.checked; } };
+  const addLine = (line) => { read(); f.lines.push(line); formRender(); setTimeout(() => { const el = $("#odHost #addItem"); if (el) el.focus(); }, 30); };
+  ta(addIn, addIn.closest(".ta").querySelector(".ta-list"), prodHits, (h) => addLine(pickLine(h.p.id, { size_code: encSize(f) || undefined })));
+  addIn.addEventListener("keydown", (e) => { if (e.key === "Enter" && addIn.value.trim() && (addIn.closest(".ta").querySelector(".ta-list").hidden)) { e.preventDefault(); const hits = searchProducts(addIn.value); if (hits.length === 1) addLine(pickLine(hits[0].p.id, { size_code: encSize(f) || undefined })); else addLine({ kind: "text", text: addIn.value.trim(), qty: 1, note: "", untracked: false }); } });
+  host.querySelectorAll(".li-text").forEach((inp) => ta(inp, inp.closest(".ta").querySelector(".ta-list"), prodHits, (h) => { read(); const i = +inp.dataset.l; const old = f.lines[i]; f.lines[i] = { ...pickLine(h.p.id, { size_code: encSize(f) || undefined }), uid: old.uid, qty: old.qty, note: old.note, group_uid: old.group_uid, print_state: old.print_state, packed: old.packed }; formRender(); }));
+  host.onchange = async (e) => { const t = e.target;
+    if (t.matches("[data-f='collection']")) { const prev = f.collection; read(); const next = f.collection; f.collection = prev;
+      if (next && f.lines.some((l) => l.src !== "collection" && l.src !== "enclosure") && !(await confirmBox({ title: "Replace the items?", body: "The collection's pieces replace what's listed now.", ok: "Replace" }))) { formRender(); return; }
+      f.collection = next; f.choices = {}; if (!next) f.lines = f.lines.filter((l) => l.src !== "collection"); else { f.lines = f.lines.filter((l) => l.src === "collection" || l.src === "enclosure"); try { await applyCollection(f); } catch (x) { f.collection = prev; toast(db.errText(x), true); } } formRender(); return; }
+    if (t.matches("[data-f],[data-l]")) { read(); if (t.dataset.lf && t.dataset.lf !== "qty" && t.dataset.lf !== "note") formRender(); } if (t.matches("[data-r]")) { const l = F.review.lines[+t.dataset.r]; const k = t.dataset.rf; if (k === "qty") l.line.qty = Math.max(1, +t.value || 1); } };
+  host.ontoggle = (e) => { if (e.target.matches("[data-custfold]")) F.custOpen = e.target.open; };
   host.onclick = async (e) => {
     const t = e.target; let b;
     if ((b = t.closest("[data-plat]"))) { read(); const p = b.dataset.plat; f.platform = f.platform.includes(p) ? f.platform.filter((x) => x !== p) : [...f.platform, p]; formRender(); return; }
+    if ((b = t.closest("[data-enc]"))) { read(); setEnclosure(f, b.dataset.enc); if (f.collection) { try { await applyCollection(f); } catch (x) { toast(db.errText(x), true); } } formRender(); return; }
+    if ((b = t.closest("[data-choice]"))) { read(); f.choices = { ...f.choices, [b.dataset.choice]: b.dataset.opt }; try { await applyCollection(f); } catch (x) { toast(db.errText(x), true); } formRender(); return; }
+    if ((b = t.closest("[data-addon]"))) { read(); f.lines.push(pickLine(b.dataset.addon, { src: "addon" })); formRender(); return; }
+    if ((b = t.closest("[data-reorder]"))) { read(); const o = store.orders.find((x) => x.id === b.dataset.reorder); if (!o) return; const lines = [...(o.lines || [])].sort((x, y) => x.line_no - y.line_no).map(lineFromSaved).map((l) => ({ ...l, uid: undefined, group_uid: null, print_state: undefined, packed: undefined, src: "repeat" }));
+      if (f.lines.length && !(await confirmBox({ title: "Replace the items?", body: "The past order's items replace what's listed now.", ok: "Replace" }))) return; f.lines = lines; formRender(); return; }
     if ((b = t.closest("[data-del]"))) { read(); f.lines.splice(+b.dataset.del, 1); formRender(); return; }
-    if ((b = t.closest("[data-addcat]"))) { read(); const i = +b.dataset.addcat; const l = f.lines[i]; if (!l) return; const x = RES.get(l.text.trim()) || {}; const a = x.add || {};
-      import("./inventory.js").then(({ addToCatalog }) => addToCatalog({ text: l.text, product: a.product || "", size: a.size || "", color_1: a.color_1 || "", color_2: a.color_2 || "" }, (id, item) => { if (F.form !== f) return; const ln = f.lines[i]; if (ln) { ln.inv = id; ln.untracked = false; } RES.delete(l.text.trim()); formRender(); })); return; }
-    if ((b = t.closest("[data-use]"))) { read(); const l = f.lines[+b.dataset.use]; const r = store.invById.get(b.dataset.inv); if (l && r) { l.text = r.item; l.inv = r.id; l.untracked = false; } formRender(); return; }
+    if ((b = t.closest("[data-addcat]"))) { read(); const i = +b.dataset.addcat; const l = f.lines[i]; if (!l) return;
+      const p = l.kind === "pick" ? cat.byProduct.get(l.product_id) : null; const x = l.kind === "text" ? RES.get(l.text.trim()) || {} : {}; const a = x.add || {};
+      const pre = l.kind === "pick" ? { text: p ? p.name : "", product: p ? p.name : "", size: p ? sizeName(p, l.size_code) : "", color_1: colorName(l.c1), color_2: colorName(l.c2) } : { text: l.text, product: a.product || "", size: a.size || "", color_1: a.color_1 || "", color_2: a.color_2 || "" };
+      import("./inventory.js").then(({ addToCatalog }) => addToCatalog(pre, async (id) => { if (F.form !== f) return; await loadCatalog(true); const ln = f.lines[i]; const v = cat.varByNotion.get(id); if (ln && v) { const c = schemeColors(v.color_scheme_id); f.lines[i] = { ...ln, kind: "pick", product_id: v.product_id, size_code: v.size_code, c1: c.c1, c2: c.c2, option_code: v.option_code || "standard", untracked: false }; delete f.lines[i].text; } if (ln && ln.kind === "text") RES.delete(ln.text.trim()); formRender(); })); return; }
     if ((b = t.closest("[data-rdel]"))) { F.review.lines.splice(+b.dataset.rdel, 1); formRender(); return; }
     const act = (t.closest("[data-act]") || {}).dataset?.act; if (!act) return;
     if (act === "clearItems") { read(); f.lines = []; formRender(); }
     if (act === "cancel") { if (snap(f) !== F.orig && !(await confirmBox({ title: "Discard changes?", body: "This order hasn't been saved.", ok: "Discard", danger: true }))) return; closeForm(); }
-    if (act === "reviewPaste") { read(); reviewPaste(host.querySelector("#pasteText").value); formRender(); }
+    if (act === "reviewPaste") { read(); const txt = host.querySelector("#pasteText").value; F.busy = true; formRender(); await reviewPaste(txt); F.busy = false; formRender(); }
     if (act === "editPaste") { const txt = F.review.text; F.review = null; formRender(); const ta2 = $("#odHost #pasteText"); if (ta2) ta2.value = txt; }
-    if (act === "importPaste") { read(); for (const l of F.review.lines) { const r = l.inv && store.invById.get(l.inv); f.lines.push({ text: r ? r.item : l.text, qty: l.qty, inv: r ? r.id : "", untracked: !!l.untracked && !r }); } F.review = null; formRender(); }
+    if (act === "importPaste") { read(); for (const l of F.review.lines) f.lines.push(l.line); F.review = null; formRender(); }
     if (act === "save") { read(); await saveForm(); }
   };
 }
 function validate(f) {
   const errs = []; if (!f.customer.trim()) errs.push("Add the customer's name"); if (!f.platform.length) errs.push("Pick the platform the order came from"); if (!f.ship_by) errs.push("Pick a ship-by date"); if (!f.lines.length) errs.push("Add at least one item");
-  f.lines.forEach((l, i) => { if (!String(l.text).trim()) errs.push(`Line ${i + 1} has no text`); });
+  f.lines.forEach((l, i) => { if (l.kind === "text" && !String(l.text).trim()) errs.push(`Line ${i + 1} has no text`); });
   return errs;
+}
+// form lines -> save_order lines. Catalog picks carry a variant id; a pick the catalog doesn't have yet is made first (hq.pick_variant make).
+async function linesForSave(ff, make = true) {
+  const uids = new Set(ff.lines.map((l) => l.uid).filter(Boolean)); const out = [];
+  for (const l of ff.lines) {
+    const o = { qty: Number(l.qty) || 1 }; if (l.uid) o.uid = l.uid; if (l.note && l.note.trim()) o.note = l.note.trim(); if (l.group_uid && uids.has(l.group_uid)) o.group_uid = l.group_uid;
+    if (l.kind === "pick") {
+      let st = pickState(l);
+      if (st.status === "creatable" && make) { const r = await db.pickVariant({ product_id: l.product_id, size_code: st.size, color_1: l.c1 || null, color_2: l.c2 || null, option_code: l.option_code || "standard", make: true }); if (r && r.status === "variant") { st = { status: "variant", name: r.name, v: { id: r.variant_id } }; invalidateCatalog(); } else throw new Error(`${(cat.byProduct.get(l.product_id) || {}).name || l.product_id}: ${pickWord({ status: "unresolved", ...(r || {}) }) || (r && r.error) || "couldn't be added to the catalog"}`); }
+      if (st.status === "variant") { o.text = st.name; o.variant_id = st.v.id; }
+      else { const p = cat.byProduct.get(l.product_id) || { name: l.product_id }; const parts = [l.size_code && l.size_code !== "standard" ? sizeName(p, l.size_code) : "", [colorName(l.c1), colorName(l.c2)].filter(Boolean).join(" + ")].filter(Boolean); o.text = p.name + (parts.length ? ` (${parts.join(", ")})` : ""); }
+    } else { o.text = String(l.text).trim(); if (l.inv) o.notion_inventory_id = l.inv; if (l.untracked && !l.inv) o.untracked = true; }
+    out.push(o);
+  }
+  return out;
 }
 async function saveForm() {
   const f = F.form; F.errors = validate(f); if (F.errors.length) { formRender(); return; }
   F.busy = true; formRender();
   const fields = ["customer", "repeat_customer", "handle", "platform", "order_number", "shipping_number", "order_date", "ship_by", "ship_type", "important", "summary", "state"];
   const orig = JSON.parse(F.orig);
-  const linesOf = (ff) => { const uids = new Set(ff.lines.map((l) => l.uid).filter(Boolean)); return ff.lines.map((l) => { const out = { text: String(l.text).trim(), qty: Number(l.qty) || 1 }; if (l.uid) out.uid = l.uid; if (l.note && l.note.trim()) out.note = l.note.trim(); if (l.inv) out.notion_inventory_id = l.inv; if (l.untracked && !l.inv) out.untracked = true; if (l.group_uid && uids.has(l.group_uid)) out.group_uid = l.group_uid; return out; }); };
-  const collections = [...new Set(f.lines.map((l) => (l.inv && store.invById.get(l.inv) || {}).collection).filter(Boolean))];
+  const collName = f.collection && cat.colls.get(f.collection) ? [cat.colls.get(f.collection).name] : [];
   try {
+    const lines = await linesForSave(f);
+    const collections = [...new Set([...collName, ...lines.map((l) => { const v = l.variant_id != null && cat.varById.get(String(l.variant_id)); const p = v && cat.byProduct.get(v.product_id); return p && p.collections && p.collections.length ? (cat.colls.get(p.collections[0]) || {}).name : null; }).filter(Boolean)])];
     if (!f.id) {
-      const p = { customer: f.customer.trim(), repeat_customer: !!f.repeat_customer, handle: f.handle.trim() || null, platform: f.platform, order_number: f.order_number.trim() || null, shipping_number: f.shipping_number.trim() || null, order_date: f.order_date || null, ship_by: f.ship_by, ship_type: f.ship_type, status: "Not started", notes: f.lines.map((l) => l.text).join("\n"), important: f.important.trim() || null, summary: f.summary.trim() || null, freebie: [], items: [], collections, order_type: [], state: f.state.trim().toUpperCase() || null, lines: linesOf(f) };
+      const p = { customer: f.customer.trim(), repeat_customer: !!f.repeat_customer, handle: f.handle.trim() || null, platform: f.platform, order_number: f.order_number.trim() || null, shipping_number: f.shipping_number.trim() || null, order_date: f.order_date || null, ship_by: f.ship_by, ship_type: f.ship_type, status: "Not started", notes: lines.map((l) => l.text).join("\n"), important: f.important.trim() || null, summary: f.summary.trim() || null, freebie: [], items: [], collections, order_type: [], state: f.state.trim().toUpperCase() || null, lines };
       const r = await db.saveOrder(p); F.busy = false;
       if (r && Array.isArray(r.duplicates) && r.duplicates.length) toast(`Saved. Order #${f.order_number} is also on: ${r.duplicates.map((d) => d.customer).join(", ")}`, true); else toast(`Saved ${f.customer.trim()}${r && r.unmatched ? ` · ${plural(r.unmatched, "line")} not in the catalog` : ""}`);
-      closeForm(); await load(); return;
+      closeForm(); await load(); if (cat.stale) await loadCatalog(); return;
     }
     // edit: apply only what changed, on top of the freshest copy of the order
     const changed = fields.filter((k) => JSON.stringify(f[k]) !== JSON.stringify(orig[k]));
-    const linesChanged = JSON.stringify(linesOf(f)) !== JSON.stringify(linesOf(orig));
+    const origLines = (await linesForSave(orig, false)).map((l) => JSON.stringify(l)).join("\n"); const linesChanged = lines.map((l) => JSON.stringify(l)).join("\n") !== origLines;
     if (!changed.length && !linesChanged) { F.busy = false; closeForm(); toast("No changes"); return; }
     const r = await db.saveWithRetry(f.id, (p) => {
       const out = { ...p };
       for (const k of changed) { let v = f[k]; if (typeof v === "string") { v = v.trim(); if (k === "state") v = v.toUpperCase(); if (!v && k !== "customer") v = null; } out[k] = v; }
-      if (linesChanged) { out.lines = linesOf(f); out.collections = collections; out.notes = f.lines.map((l) => l.text).join("\n"); }
+      if (linesChanged) { out.lines = lines; out.collections = collections; out.notes = lines.map((l) => l.text).join("\n"); }
       return out;
     });
-    F.busy = false; toast(`Saved ${f.customer.trim()}${r && r.unmatched ? ` · ${plural(r.unmatched, "line")} not in the catalog` : ""}`); closeForm(); await reloadOrder(f.id);
+    F.busy = false; toast(`Saved ${f.customer.trim()}${r && r.unmatched ? ` · ${plural(r.unmatched, "line")} not in the catalog` : ""}`); closeForm(); await reloadOrder(f.id); if (cat.stale) await loadCatalog();
   } catch (e) { F.busy = false; F.errors = [db.errText(e)]; formRender(); }
 }
 

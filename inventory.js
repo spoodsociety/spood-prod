@@ -1,6 +1,6 @@
 // Inventory: shelf view (tiles per variation), list view (end-of-day count), counts and adjustments through apply_moves.
 import * as db from "./supabase.js";
-import { $, esc, plural, store, onChange, owed, splitName, sizeLabel, toast, modal, reloadInventory, setErr, shipBy, fmtDay, cleanText, invRowOf, eff, lineKind } from "./orders.js";
+import { $, esc, plural, store, onChange, owed, splitName, sizeLabel, toast, modal, reloadInventory, setErr, shipBy, fmtDay, cleanText, invRowOf, eff, lineKind, loadCatalog, invalidateCatalog } from "./orders.js";
 
 const PRODUCT_ORDER = ["Cosmic", "Galaxy", "Gothic", "Haunted", "Neon Halloween", "Woodland", "Yeti", "Ocean", "Christmas", "Celestial Bat"];
 const TAIL = ["Floor Inserts", "Hides", "Supplies"];
@@ -105,8 +105,7 @@ async function saveAdjust(v, kind, qty, reason) {
 const addPill = (v) => { const it = D.ITEMS.find((x) => x.vars.includes(v)); return it ? `<div class="crow addrow"><button type="button" class="btn ghost mini" data-addvar="${esc(it.key)}">+ Add variation</button></div>` : ""; };
 
 /* ---------- Add a color or size: a new variant of an item already on the shelf (hq.add_variant, then a starting count) ---------- */
-let OPTS = null;
-async function options() { if (!OPTS) OPTS = await db.catalogOptions(); return OPTS; }
+async function options() { return loadCatalog(); }
 function productOf(it, opts) { // the catalog product behind this item: the longest product id that prefixes a variation's sku
   let best = null; for (const v of it.vars) { const sku = v.r.sku || ""; for (const p of opts.products || []) if (sku === p.id || sku.startsWith(p.id + "-")) if (!best || p.id.length > best.id.length) best = p; }
   return best;
@@ -177,7 +176,7 @@ async function newItem() {
     const btn = q("#nSave"); btn.disabled = true; btn.textContent = "Adding…";
     let r; try { r = await db.addVariant({ product: name, collection: coll || null, category: cat, size, color_1: c1 || null, color_2: c2 || null, inventory_name, new: isNew }); }
     catch (x) { btn.disabled = false; btn.textContent = "Add"; return err(db.errText(x)); }
-    OPTS = null; // catalog changed
+    invalidateCatalog(); // catalog changed
     if (n > 0) { try { await db.applyMoves([{ notion_id: r.notion_id, kind: "count", qty: n, reason: "Starting count", ref: "inventory" }]); } catch (x) { await reloadInventory(); render(); btn.disabled = false; btn.textContent = "Add"; return err(`Added ${inventory_name}, but the starting count was not saved: ${db.errText(x)}. Count it from its tile.`); } }
     m.close(); toast(`Added ${inventory_name}${n ? ` · ${n} on shelf` : ""}`); await reloadInventory(); openV = r.notion_id; render();
   };
@@ -222,7 +221,7 @@ export async function addToCatalog(pre = {}, onDone = null) {
     const btn = q("#acSave"); btn.disabled = true; btn.textContent = "Adding…";
     let r; try { r = await db.addVariant({ product: name, collection: coll || null, category: isNew ? q("#acCat").value : undefined, size, color_1: c1 || null, color_2: c2 || null, inventory_name, new: isNewFlags }); }
     catch (x) { btn.disabled = false; btn.textContent = "Add"; return err(db.errText(x)); }
-    OPTS = null; m.close(); toast(`Added ${inventory_name}${r.created && r.created.length ? ` (new ${r.created.join(", ")})` : ""}`);
+    invalidateCatalog(); m.close(); toast(`Added ${inventory_name}${r.created && r.created.length ? ` (new ${r.created.join(", ")})` : ""}`);
     await reloadInventory(); if (onDone) onDone(r.notion_id, inventory_name); else { openV = r.notion_id; render(); }
   };
 }
