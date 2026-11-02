@@ -199,6 +199,15 @@ const actions = {
     if (joined.length) return `Added to ${joined.join(", ")}${made > joined.length ? ` + ${plural(made - joined.length, "new batch", "new batches")}` : ""}`;
     return `Committed ${plural(made, "batch", "batches")}. See Printer queues`;
   },
+  queueFromBin(ids, printer, start, extra, spec) { // pieces of the lines (+ extra copies for stock); starting now gets its own batch, just queuing joins the printer's last queued batch
+    const items = ids.map((id) => { const pc = PIECE_BY_ID.get(id); return { uid: id, pieceId: id, spec: specOf(pc), hours: pc.hours }; });
+    const inv = spec.inv || store.inv.find((x) => { const sp = lineSpec({ notion_inventory_id: x.id }); return norm(sp.name) === norm(spec.name) && norm(sizeBucket(sp.size)) === norm(sizeBucket(spec.size)) && norm(sp.color) === norm(spec.color); })?.id || null;
+    for (let n = 0; n < extra; n++) items.push({ uid: nextId("s"), pieceId: null, spec: { ...spec, inv }, hours: hoursFor(spec.name, spec.size) });
+    let batch = start ? null : [...state.lanes[printer]].reverse().find((b) => b.state === B.QUEUED);
+    if (batch) batch.items.push(...items); else { batch = { id: nextId("b"), name: "", state: B.QUEUED, items }; batch.name = "Batch " + state.seq; state.lanes[printer].push(batch); }
+    if (start) batch.state = B.PRINTING;
+    ids.forEach((id) => delete ui.picks[id]);
+  },
   moveBatch(id, dir) { const at = locate(id); if (!at) return; const j = at.index + dir; if (j < 0 || j >= at.list.length) return; [at.list[at.index], at.list[j]] = [at.list[j], at.list[at.index]]; },
   stackBatch(id) { const at = locate(id); if (!at) return; const below = at.list[at.index + 1]; if (!below) return; at.batch.items.push(...below.items); at.list.splice(at.index + 1, 1); return "Stacked into " + at.batch.name; },
   sendBatch(id, printer) { printer = Number(printer); const at = locate(id); if (!at || !printer || printer === at.printer) return; at.list.splice(at.index, 1); state.lanes[printer].push(at.batch); return `${at.batch.name} moved to Printer ${printer}`; },
@@ -235,7 +244,7 @@ const actions = {
   dismissPending(key) { delete state.pendingStock[key]; },
   clearPending(key) { delete state.pendingStock[key]; },
 };
-const UNDOABLE = new Set(["commitPicks", "moveBatch", "stackBatch", "sendBatch", "startBatch", "finishPrinting", "backToPrinting", "setDest", "addPiece", "dupItem", "setReprint", "reprintItem", "finalize", "reopen", "removeItem", "queueSuggestion", "newStockBatch", "addStock", "setBatchHours", "restockAdd", "dismissPending", "renameBatch"]);
+const UNDOABLE = new Set(["commitPicks", "queueFromBin", "moveBatch", "stackBatch", "sendBatch", "startBatch", "finishPrinting", "backToPrinting", "setDest", "addPiece", "dupItem", "setReprint", "reprintItem", "finalize", "reopen", "removeItem", "queueSuggestion", "newStockBatch", "addStock", "setBatchHours", "restockAdd", "dismissPending", "renameBatch"]);
 let history = [];
 function dispatch(name, ...args) {
   if (UNDOABLE.has(name)) { history.push({ label: name, snap: JSON.stringify(state) }); if (history.length > 30) history.shift(); }
@@ -434,7 +443,7 @@ function shell() {
     <section id="vByColor" hidden><div class="pqsearch"><label>Ships by <select data-act="due"><option value="all">Any time</option><option value="0">Today (and late)</option><option value="1">Tomorrow</option><option value="3">Next 3 days</option><option value="7">Next 7 days</option></select></label><label><input type="checkbox" data-act="hideShelf"> Hide shelf pieces</label><input type="search" data-act="search" placeholder="Search color, item, customer…" aria-label="Search pieces" autocomplete="off"></div><div id="colors" class="groups"></div></section>
     <section id="vQueues" hidden><div class="settings"><label>Queue starts <input id="startAt" data-act="setStartAt" type="time" value="08:00"></label><label>Print hours per printer per day <input id="hpd" data-act="setHpd" type="number" min="1" max="24" style="width:4.5em"></label><span>Times assume each printer runs its stack back to back.</span></div><div id="batchQueues"></div><div id="lanes" class="lanes"></div></section>
     <section id="vRestock" hidden><div class="settings"><label>Keep enough on the shelf for <input id="weeks" data-act="setWeeks" type="number" min="0" max="8" step="0.5" style="width:4.5em"> week(s) of sales</label><span>or your keep-on-hand number, whichever is higher. Free = shelf left after open orders take theirs, plus stock already queued.</span></div><div id="restock" class="groups"></div></section>
-    <div class="commit" id="commitBar" hidden><div class="pcounts" id="pcounts"></div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><label style="flex-direction:row;align-items:center;gap:6px;text-transform:none;letter-spacing:0;font-size:.85rem">Commit into <select data-act="commitMode"><option value="new">new batches</option><option value="join">each printer’s last queued batch</option></select></label><button type="button" class="pq-btn ghost" data-act="clearPicks">Clear picks</button><button type="button" class="pq-btn accent" data-act="commitPicks" id="commitBtn">Commit to queues</button></div></div>
+    <div class="commit" id="commitBar" hidden><div class="pcounts" id="pcounts"></div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><label style="flex-direction:row;align-items:center;gap:6px;text-transform:none;letter-spacing:0;font-size:.85rem">Commit into <select data-act="commitMode"><option value="new">new batches</option><option value="join">each printer’s last queued batch</option></select></label><button type="button" class="pq-btn ghost" data-act="clearPicks">Clear picks</button><button type="button" class="pq-btn accent" data-act="commitPicks" id="commitBtn">Commit to queues</button><button type="button" class="pq-btn ghost" data-act="commitGo">Commit & view queues</button></div></div>
     <datalist id="dlItems"></datalist><datalist id="dlColors"></datalist>`;
 }
 const setHTML = (el, html) => { if (!el || el.__html === html) return false; el.innerHTML = html; el.__html = html; return true; };
@@ -472,6 +481,7 @@ const CLICK = {
   gapGo: (d) => { ui.view = "byitem"; if (!ui.openGroups.includes(d.key)) ui.openGroups.push(d.key); ui.q = ""; ui.due = "all"; persistUi(); render(); const el = host.querySelector(`details[data-group="${CSS.escape(d.key)}"]`); if (el) { el.open = true; el.scrollIntoView({ block: "center", behavior: "smooth" }); } },
   gapMore: () => uiSet(() => { ui.gapAll = !ui.gapAll; }),
   commitPicks: () => { const picks = livePicks(); if (!picks.length) { toast("Pick a printer for at least one piece first"); return; } dispatch("commitPicks", picks); ui.picks = {}; persistUi(); render(); },
+  commitGo: () => { const picks = livePicks(); if (!picks.length) { toast("Pick a printer for at least one piece first"); return; } dispatch("commitPicks", picks); ui.picks = {}; ui.view = "queues"; persistUi(); render(); },
   clearPicks: () => uiSet(() => { ui.picks = {}; }),
   undo: () => undo(),
   unprint: async (d, el) => { el.disabled = true; const L = LINE_BY_UID.get(d.line); try { await db.setLineState([{ uid: d.line, print_state: "print", print_src: "plan" }]); } catch (e) { toast("⚠ " + db.errText(e), true); } if (L) await reloadOrder(L.o.id); },
@@ -502,16 +512,18 @@ const CHANGE = {
 };
 /* ---------- Bin View → "Add to print queue": the open pieces of these lines go on a printer ---------- */
 export const laneSummary = () => PRINTERS.map((p) => ({ printer: p, queued: sum(state.lanes[p].filter((b) => b.state === B.QUEUED), (b) => b.items.length), printing: state.lanes[p].some((b) => b.state === B.PRINTING) }));
-export function queueLines(lineUids, printer, start) {
+export function queueLines(lineUids, printer, start, extra = 0) {
   if (!loaded) throw new Error("The print plan hasn't loaded yet");
   printer = Number(printer); if (!PRINTERS.includes(printer)) throw new Error("Pick a printer");
   const covered = coveredPieceIds(); const ids = [...PIECE_BY_ID.values()].filter((p) => lineUids.includes(p.line) && !covered.has(p.id) && !p.onShelf).map((p) => p.id);
-  if (!ids.length) throw new Error("Nothing left to print on these lines (already queued or on the shelf)");
-  const prev = ui.commitMode; ui.commitMode = start ? "new" : "join"; // starting now gets its own batch; just queuing joins the printer's last queued batch
-  try { dispatch("commitPicks", ids.map((id) => [id, printer])); } finally { ui.commitMode = prev; persistUi(); }
-  if (start) { const b = [...state.lanes[printer]].reverse().find((x) => x.state === B.QUEUED && x.items.some((i) => ids.includes(i.uid))); if (b) dispatch("startBatch", b.id); }
-  return ids.length;
+  extra = clamp(Math.round(Number(extra) || 0), 0, 50);
+  if (!ids.length && !extra) throw new Error("Nothing left to print on these lines (already queued or on the shelf)");
+  const spec = specOf(PIECE_BY_ID.get(ids[0] || [...PIECE_BY_ID.values()].find((p) => lineUids.includes(p.line))?.id) || {});
+  if (!spec.name) throw new Error("Nothing to print on these lines");
+  dispatch("queueFromBin", ids, printer, !!start, extra, spec);
+  return ids.length + extra;
 }
+export function showQueues() { ui.view = "queues"; persistUi(); render(); }
 
 export function init() {
   host = document.getElementById("pqHost"); if (!host) return; host.innerHTML = shell();

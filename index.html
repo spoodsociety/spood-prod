@@ -592,7 +592,7 @@ label.allto{display:flex;flex-direction:row;gap:6px;align-items:center;font-size
 <div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
 <div id="modalHost"></div>
 
-<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611021646","./orders.js":"./orders.js?v=2611021646","./printplan.js":"./printplan.js?v=2611021646","./inventory.js":"./inventory.js?v=2611021646"}}</script>
+<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611021715","./orders.js":"./orders.js?v=2611021715","./printplan.js":"./printplan.js?v=2611021715","./inventory.js":"./inventory.js?v=2611021715"}}</script>
 <script type="module">
 import * as db from "./supabase.js";
 import * as orders from "./orders.js";
@@ -605,6 +605,7 @@ const showTab = (name) => { tabs.forEach((x) => x.setAttribute("aria-selected", 
 tabs.forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
 orders.hooks.lanes = plan.laneSummary; orders.hooks.queue = plan.queueLines;
 document.addEventListener("spood:inventory", (e) => { showTab("inventory"); inv.open(e.detail.id, e.detail.mode); });
+document.addEventListener("spood:printqueue", () => { showTab("print"); plan.showQueues(); });
 let startTab = "bins"; try { startTab = localStorage.getItem("spood.tab") || "bins"; } catch (e) {}
 if (![...tabs].some((b) => b.dataset.tab === startTab)) startTab = "bins";
 showTab(startTab);
