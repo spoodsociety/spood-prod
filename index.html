@@ -73,6 +73,8 @@ nav.tabs button svg{width:18px;height:18px;flex:none}
 nav.tabs button:hover{background:rgba(255,255,255,.12)}
 nav.tabs button[aria-selected="true"]{background:#fff;color:#9E3D6B;box-shadow:inset 0 2px 0 #fff,inset 0 -5px 8px rgba(126,93,184,.14),0 8px 16px rgba(30,10,40,.2)}
 @media (max-width:480px){nav.tabs button svg{display:none}nav.tabs button{padding:0 12px;font-size:.88rem}}
+header.top .btn{align-self:center}
+#whoami{display:inline-flex;align-items:center;gap:6px}
 @media (max-width:860px){header.top{border-radius:22px;padding:12px 14px}}
 button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--eye);outline-offset:2px}
 section.panel{display:flex;flex-direction:column;gap:14px}
@@ -580,7 +582,7 @@ label.allto{display:flex;flex-direction:row;gap:6px;align-items:center;font-size
 <div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
 <div id="modalHost"></div>
 
-<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611021021","./orders.js":"./orders.js?v=2611021021","./printplan.js":"./printplan.js?v=2611021021","./inventory.js":"./inventory.js?v=2611021021"}}</script>
+<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611021213","./orders.js":"./orders.js?v=2611021213","./printplan.js":"./printplan.js?v=2611021213","./inventory.js":"./inventory.js?v=2611021213"}}</script>
 <script type="module">
 import * as db from "./supabase.js";
 import * as orders from "./orders.js";
