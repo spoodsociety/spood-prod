@@ -197,7 +197,22 @@ export async function undoDone(id) {
 const BIN = { days: [], open: null, stOpen: null, layout: "cols", pinned: {} };
 try { BIN.layout = localStorage.getItem("spood.bin.layout") || "cols"; } catch (e) {}
 const SV = (d, cls) => `<span class="bvicon ${cls}" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg></span>`;
-const IC = { run: '<path d="M21 12a9 9 0 1 1-18 0a9 9 0 1 1 18 0z"/><path d="M12 7v5l3 2"/>', done: '<path d="M21 12a9 9 0 1 1-18 0a9 9 0 1 1 18 0z"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/>', shelf: '<path d="M3 7l9-4 9 4v10l-9 4-9-4z"/><path d="M3 7l9 4 9-4"/><path d="M12 11v10"/>', out: '<path d="M20 11a8 8 0 0 0-14.9-4"/><path d="M4 4v4h4"/><path d="M4 13a8 8 0 0 0 14.9 4"/><path d="M20 20v-4h-4"/>', shelfunit: '<path d="M4 3v18"/><path d="M20 3v18"/><path d="M4 9h16"/><path d="M4 15h16"/><path d="M4 21h16"/>' };
+const IC = { run: '<path d="M21 12a9 9 0 1 1-18 0a9 9 0 1 1 18 0z"/><path d="M12 7v5l3 2"/>', done: '<path d="M21 12a9 9 0 1 1-18 0a9 9 0 1 1 18 0z"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/>', shelf: '<path d="M3 7l9-4 9 4v10l-9 4-9-4z"/><path d="M3 7l9 4 9-4"/><path d="M12 11v10"/>', out: '<path d="M20 11a8 8 0 0 0-14.9-4"/><path d="M4 4v4h4"/><path d="M4 13a8 8 0 0 0 14.9 4"/><path d="M20 20v-4h-4"/>', shelfunit: '<path d="M4 3v18"/><path d="M20 3v18"/><path d="M4 9h16"/><path d="M4 15h16"/><path d="M4 21h16"/>',
+  tag: '<path d="M3 12V3h9l9 9-9 9z"/><path d="M7.5 7.5h.01"/><path d="M13 12h5M15.5 9.5v5"/>', gift: '<rect x="3" y="8" width="18" height="5"/><path d="M5 13v8h14v-8"/><path d="M12 8v13"/><path d="M12 8c-2-4-6-4-6-1s6 1 6 1c2-4 6-4 6-1s-6 1-6 1"/>',
+  star: '<path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.5 2.9 1-6.1L3.2 9.5l6.1-.9z"/>', crown: '<path d="M3 8l4.5 4L12 5l4.5 7L21 8l-2 11H5z"/>' };
+const SVF = (d) => `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+// Repeat-customer marks as in HQ: ★ outline at 2+ order days, filled at 3+, two at 5+; crown at 2+ enclosures bought
+let CUSTSTAT = { at: 0, map: new Map() };
+function custBadge(name) {
+  if (CUSTSTAT.at !== store.loadedAt) { const m = new Map(); for (const o of store.orders) { const k = normName(o.customer); if (!k) continue; let c = m.get(k); if (!c) { c = { days: new Set(), encl: 0 }; m.set(k, c); } c.days.add(o.order_date || String(o.created_at).slice(0, 10)); c.encl += (o.lines || []).filter((l) => isEncText(l.text)).length; } CUSTSTAT = { at: store.loadedAt, map: m }; }
+  const c = CUSTSTAT.map.get(normName(name)); const n = c ? c.days.size : 0; const big = c && c.encl >= 2;
+  const lvl = n >= 5 ? 3 : n >= 3 ? 2 : n >= 2 ? 1 : 0;
+  const rep = lvl ? ` <span class="bvrep l${lvl}" role="img" aria-label="${lvl === 3 ? "Top customer" : "Repeat customer"}, ${n} orders" data-tip="${lvl === 3 ? "Top customer" : "Repeat customer"} · ${n} orders">${lvl === 1 ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${IC.star}</svg>` : lvl === 2 ? SVF(IC.star) : SVF(IC.star) + SVF(IC.star)}</span>` : "";
+  const crown = big ? ` <span class="bvrep big" role="img" aria-label="Big customer, ${c.encl} enclosures" data-tip="Big customer · ${c.encl} enclosures">${SVF(IC.crown)}</span>` : "";
+  return rep + crown;
+}
+// glue the icons to the last word so they never wrap onto a line of their own (HQ's .bvglue)
+const glue = (label, icons) => { const m = String(label).match(/^(.*?)(\S+)\s*$/); return m ? `${esc(m[1])}<span class="bvglue">${esc(m[2])}${icons}</span>` : esc(label) + icons; };
 const LAB = { print: "Needs printing", printing: "Printing", printed: "Printed", shelf: "Pull from shelf", packed: "Packed", out: "Out of stock", none: "", head: "" };
 const encHead = (t) => { const m = cleanText(t).match(/^(?:(\w+)\s+)?(?:complete\s+)?enclosure(s)?\s*[-–:]?\s*(large|small)?/i); if (!m) return cleanText(t); const n = { two: 2, three: 3, four: 4 }[String(m[1] || "").toLowerCase()] || (/^\d+$/.test(m[1] || "") ? m[1] : ""); return (n ? n + " " : "") + (m[3] ? m[3].toUpperCase() + " " : "") + "ENCLOSURE" + (m[2] || n ? "S" : ""); };
 
@@ -241,13 +256,18 @@ function lineHtml(o, l) {
   const cls = (e.st === "packed" ? "s-packed " + (e.from === "shelf" ? "s-shelf" : "s-done") : e.st === "print" ? "s-print" : e.st === "printing" ? "s-printing" : e.st === "printed" ? "s-done" : e.st === "shelf" ? "s-shelf" : e.st === "out" ? "s-out" : "") + (head ? " s-head" : "");
   const r = invRowOf(l); const qty = Number(l.qty) || 1;
   const name = r ? splitName(r.item) : null; const label = head ? encHead(l.text) : (qty > 1 ? qty + " × " : "") + (name ? name.base + (name.size || name.color ? ` (${[name.size, name.color].filter(Boolean).join(", ")})` : "") : cleanText(l.text).replace(/^\d{1,2}\s*[x×]?\s+(?=[a-z])/i, ""));
-  const icon = e.st === "packed" ? "" : e.st === "printing" ? SV(IC.run, "f-run") : e.st === "printed" ? SV(IC.done, "f-done") : e.st === "shelf" ? SV(IC.shelf, "f-shelf") : e.st === "out" ? SV(IC.out, "f-out") : "";
+  const stIcon = e.st === "packed" ? "" : e.st === "printing" ? SV(IC.run, "f-run") : e.st === "printed" ? SV(IC.done, "f-done") : e.st === "shelf" ? SV(IC.shelf, "f-shelf") : e.st === "out" ? SV(IC.out, "f-out") : "";
+  const said = cleanText(l.text); const freeNames = (o.freebie || []).map((f) => normName(f)).filter(Boolean);
+  const marks = (/add-?on/i.test(said) ? `<span class="bvtype t-addon" role="img" aria-label="Add-on" data-tip="Add-on">${SVF(IC.tag).replace('fill="currentColor"', 'fill="none"')}</span>` : "")
+    + (freeNames.some((f) => normName(said).includes(f) || f.includes(normName(said))) ? `<span class="bvtype t-free" role="img" aria-label="Freebie" data-tip="Freebie">${SVF(IC.gift).replace('fill="currentColor"', 'fill="none"')}</span>` : "");
+  const icon = marks + stIcon;
   const sub = e.st === "out" ? `<span class="bvsub">${(r && Number(r.in_stock) > 0 ? "Reserved for earlier orders" : "Out of stock")}${e.a ? ` · ${e.a} of ${qty} on the shelf` : ""}</span>` : e.part ? `<span class="bvsub">${e.a} of ${qty} on the shelf · print ${qty - e.a}</span>` : (l.match === "unmatched" && !head ? `<span class="bvsub">Not in the catalog</span>` : "");
   const noteHtml = l.note ? `<span class="bvsub bvnote">${esc(l.note)}</span>` : "";
   const tip = `${e.st === "packed" ? "Packed" : LAB[e.st] || ""}${l.state_by ? " · " + l.state_by : ""}\nOrder says: ${cleanText(l.text)}`;
-  const box = `<input type="checkbox" class="npack" data-pack="${key}" data-oid="${o.id}" data-from="${pull ? "shelf" : "print"}" ${l.packed ? "checked" : ""} ${packable && !busy ? "" : "disabled"} aria-label="Packed: ${esc(cleanText(l.text))}" title="${packable ? "Packed" : "Mark it printed or pull it from the shelf before packing"}">`;
+  const box = head ? `<input type="checkbox" class="npack" data-pack="${key}" data-oid="${o.id}" data-from="${pull ? "shelf" : "print"}" ${l.packed ? "checked" : ""} ${packable && !busy ? "" : "disabled"} aria-label="Packed: ${esc(cleanText(l.text))}">`
+    : `<span class="bvbox" data-tip="${l.packed ? "Packed" : packable ? "Mark packed" : "Can't pack yet"}"><input type="checkbox" class="npack" data-pack="${key}" data-oid="${o.id}" data-from="${pull ? "shelf" : "print"}" ${l.packed ? "checked" : ""} ${packable && !busy ? "" : "disabled"} aria-label="Packed: ${esc(cleanText(l.text))}"></span>`;
   const dot = (e.st === "print" || e.st === "printing") && !l.packed ? `<button type="button" class="bvst" data-binopen="${key}" aria-label="${LAB[e.st]}: change status" tabindex="-1"></button>` : "";
-  const text = canMark ? `<button type="button" class="ntext" data-binopen="${key}" aria-haspopup="menu" aria-expanded="${open}" title="${esc(tip)}">${esc(label)}${icon}</button>` : `<span class="ntext" title="${esc(tip)}">${head ? `<span class="nenc">${esc(label)}</span>` : esc(label) + icon}</span>`;
+  const text = canMark ? `<button type="button" class="ntext" data-binopen="${key}" aria-haspopup="menu" aria-expanded="${open}" data-tip="${esc(tip)}">${glue(label, icon)}</button>` : `<span class="ntext" ${head ? "" : `data-tip="${esc(tip)}"`}>${head ? `<span class="nenc">${esc(label)}</span>` : glue(label, icon)}</span>`;
   const stockBubble = head && r && r.in_stock != null && !l.packed ? (() => { const n = Number(r.in_stock) || 0; const need = owed.get(r.id) || 0; if (e.st === "shelf") return ""; return `<span class="bvstock ${n < 1 ? "out" : ""}" title="${n} ${esc(r.item)} on the shelf, ${need} open orders need one">${SV(IC.shelfunit, "")}${n}</span>`; })() : "";
   const opt = (st, lab, on) => `<button type="button" role="menuitemradio" aria-checked="${!!on}" data-ls="${st}" data-uid="${key}" data-oid="${o.id}" class="nm-${st || "reset"}">${on ? "✓ " : ""}${lab}</button>`;
   const pkOpt = `<button type="button" role="menuitemcheckbox" aria-checked="${!!l.packed}" data-packbtn="${key}" data-oid="${o.id}" data-from="${pull ? "shelf" : "print"}" data-set="${l.packed ? "0" : "1"}" class="nm-pack">${l.packed ? "✓ Packed (tap to unpack)" : "Mark as packed"}</button>`;
@@ -281,7 +301,7 @@ export function cardHtml(o) {
   const pin = !!BIN.pinned[o.id];
   const err = store.errs["o:" + o.id] ? `<div class="err">${esc(store.errs["o:" + o.id])}</div>` : "";
   return `<article class="ncard" data-ob="${o.id}">
-    <div class="ncard-t"><button type="button" class="nedit" data-obedit="${o.id}" title="Edit the order">${esc(o.customer)}<span class="nedit-i" aria-hidden="true">✎</span></button>${o.repeat_customer || /\*\s*$/.test(o.customer) ? '<span class="np np-yellow" title="Repeat customer">★</span>' : ""}${isExpress(o) ? '<span class="np np-red">Express</span>' : ""}${det ? `<button type="button" class="nsthint" data-det="${o.id}" aria-expanded="${pin}">details${pin ? " ▴" : " ▾"}</button>` : ""}</div>
+    <div class="ncard-t"><button type="button" class="nedit" data-obedit="${o.id}" title="Edit the order">${esc(o.customer)}<span class="nedit-i" aria-hidden="true">✎</span></button>${custBadge(o.customer)}${isExpress(o) ? '<span class="np np-red">Express</span>' : ""}${det ? `<button type="button" class="nsthint" data-det="${o.id}" aria-expanded="${pin}">details${pin ? " ▴" : " ▾"}</button>` : ""}</div>
     ${det && pin ? `<div class="ndet">${det}</div>` : ""}
     <div class="nprop nstatwrap"><div class="nstatrow"><button type="button" class="np np-${NSTAT[cur] || "gray"} nstat" data-stopen="${o.id}" aria-haspopup="menu" aria-expanded="${BIN.stOpen === o.id}" ${busy ? "disabled" : ""} title="Change order status"><i></i>${esc(cur)}${busy ? " · saving…" : " ▾"}</button>${plats.map((p) => `<span class="np np-${platColor(p)}">${esc(p)}</span>`).join("")}
       ${hint ? (hint.note ? `<span class="nsthint warn" title="${esc(hint.tip)}" role="img" aria-label="${esc(hint.tip)}">!</span>` : `<button type="button" class="nsthint" data-hint="${esc(hint.to)}" data-oid="${o.id}" title="${esc(hint.tip)}">→ ${esc(hint.to)}</button>`) : ""}</div>
@@ -289,7 +309,7 @@ export function cardHtml(o) {
     ${o.important ? `<div class="nprop nimp">${esc(o.important)}</div>` : ""}
     ${err}
     <div class="nlines">${ordered.map((l) => lineHtml(o, l)).join("") || '<div class="sub">No items on this order.</div>'}</div>
-    ${(o.freebie || []).length ? `<div class="sub">🎁 ${o.freebie.map(esc).join(", ")}</div>` : ""}
+    ${(o.freebie || []).length ? `<div class="sub nfree"><span class="bvtype t-free" aria-hidden="true">${SVF(IC.gift).replace('fill="currentColor"', 'fill="none"')}</span> ${o.freebie.map(esc).join(", ")}</div>` : ""}
     <div class="ncard-f">${o.order_date ? `Ordered ${esc(fmtDay(o.order_date))}` : ""}<span style="flex:1"></span>v${o.version}</div>
   </article>`;
 }
