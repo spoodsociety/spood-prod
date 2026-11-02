@@ -189,15 +189,16 @@ export async function setStatus(o, status) {
 }
 export const recentDone = [];
 export async function undoDone(id) {
-  const q = recentDone.find((x) => x.id === id); const status = q && q.prev && q.prev !== "Done" ? q.prev : "Not started";
+  const q = recentDone.find((x) => x.id === id); const o = store.orders.find((x) => x.id === id);
+  const prev = (q && q.prev) || (o && o.done_prev); const status = prev && obPick(prev) !== "Done" ? obPick(prev) : "Not started";
   const ok = await act("o:" + id, () => db.saveWithRetry(id, (p) => ({ ...p, status }), { undo: true }), { reload: id });
-  if (ok) { const i = recentDone.findIndex((x) => x.id === id); if (i >= 0) recentDone.splice(i, 1); toast(((q && q.customer) || "Order") + " is back on the board. Shelf pieces were put back"); await reloadInventory(); }
+  if (ok) { const i = recentDone.findIndex((x) => x.id === id); if (i >= 0) recentDone.splice(i, 1); toast(((q && q.customer) || (o && o.customer) || "Order") + " is back on the board. Shelf pieces were put back"); await reloadInventory(); }
   else toast("Undo didn't save: " + (store.errs["o:" + id] || ""), true);
   return ok;
 }
 
 /* ===================== Bin View ===================== */
-const BIN = { days: [], open: null, stOpen: null, layout: "cols", pinned: {} };
+const BIN = { days: [], open: null, stOpen: null, layout: "cols", pinned: {}, mode: "open", doneOpen: new Set(), doneLimit: 40 };
 try { BIN.layout = localStorage.getItem("spood.bin.layout") || "cols"; } catch (e) {}
 const SV = (d, cls) => `<span class="bvicon ${cls}" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg></span>`;
 const IC = { run: '<path d="M21 12a9 9 0 1 1-18 0a9 9 0 1 1 18 0z"/><path d="M12 7v5l3 2"/>', done: '<path d="M21 12a9 9 0 1 1-18 0a9 9 0 1 1 18 0z"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/>', shelf: '<path d="M3 7l9-4 9 4v10l-9 4-9-4z"/><path d="M3 7l9 4 9-4"/><path d="M12 11v10"/>', out: '<path d="M20 11a8 8 0 0 0-14.9-4"/><path d="M4 4v4h4"/><path d="M4 13a8 8 0 0 0 14.9 4"/><path d="M20 20v-4h-4"/>', shelfunit: '<path d="M4 3v18"/><path d="M20 3v18"/><path d="M4 9h16"/><path d="M4 15h16"/><path d="M4 21h16"/>',
@@ -326,7 +327,12 @@ export function binRender() {
   if (st) st.textContent = store.err ? "⚠ " + store.err : store.loadedAt ? `${plural(store.open.length, "open order")}${nocat ? ` · ⚠ ${plural(nocat, "line")} not in the catalog` : ""} · synced ${store.loadedAt.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })} · refreshes every 20 s` : "Reading orders…";
   const sel = $("#binPlat"); if (sel) { const plats = [...new Set(store.orders.flatMap((o) => o.platform || []))].sort(); const cur = sel.value; sel.innerHTML = `<option value="">All platforms</option>` + plats.map((p) => `<option ${p === cur ? "selected" : ""}>${esc(p)}</option>`).join(""); }
   document.querySelectorAll("[data-binlay]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.binlay === BIN.layout)));
+  document.querySelectorAll("[data-binmode]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.binmode === BIN.mode)));
+  const done = BIN.mode === "done";
+  for (const el of [$("#binDays"), $("#binLay"), $('[data-fold="bininvhow"]')]) if (el) el.hidden = done;
+  if (done && st && !store.err && store.loadedAt) st.textContent = `${plural(store.orders.length - store.open.length, "done order")} · synced ${store.loadedAt.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
   if (!store.loadedAt) return;
+  if (done) { doneRender(box); return; }
   const today = isoDay(); const dk = (o) => (shipBy(o) < today ? "overdue" : shipBy(o));
   const all = store.open;
   const days = [...new Set(all.map(dk))]; BIN.days = BIN.days.filter((k) => days.includes(k)); const selDays = new Set(BIN.days);
@@ -344,6 +350,29 @@ export function binRender() {
   if (!rows) binScrollbar(box.querySelector(".nscroll"), box.querySelector(".nboard"));
 }
 
+// Done orders, newest first, grouped by the day they were marked Done (Notion imports: their ship date).
+const doneKey = (o) => (o.done_at ? isoDay(new Date(o.done_at)) : shipBy(o));
+function doneRender(box) {
+  const q = ($("#binSearch").value || "").trim().toLowerCase(), pf = ($("#binPlat").value || "").toLowerCase();
+  const all = store.orders.filter((o) => o.status === "Done");
+  const list = all.filter((o) => (!pf || (o.platform || []).some((p) => p.toLowerCase().includes(pf))) && (!q || [o.customer, o.important, o.order_number, o.state, o.shipping_number, ...(o.lines || []).map((l) => l.text)].join(" ").toLowerCase().includes(q)))
+    .sort((a, b) => doneKey(b).localeCompare(doneKey(a)) || String(b.done_at || "").localeCompare(String(a.done_at || "")) || rank(b, a));
+  if (!list.length) { box.innerHTML = `<div class="card"><div class="empty">${all.length ? "No done orders match." : "No orders marked Done yet."}</div></div>`; return; }
+  const shown = list.slice(0, BIN.doneLimit); const groups = [];
+  for (const o of shown) { const k = doneKey(o); let g = groups[groups.length - 1]; if (!g || g.k !== k) groups.push((g = { k, list: [] })); g.list.push(o); }
+  const lab = (k) => (k === NO_DATE ? "No date" : dayLabel(k).replace(/^./, (c) => c.toUpperCase()));
+  const row = (o) => {
+    const busy = store.busy.has("o:" + o.id); const open = BIN.doneOpen.has(o.id); const err = store.errs["o:" + o.id];
+    const lines = [...(o.lines || [])].sort((a, b) => a.line_no - b.line_no); const n = lines.reduce((a, l) => a + (Number(l.qty) || 1), 0);
+    const when = o.done_at ? `${new Date(o.done_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}${o.done_by ? " · " + esc(o.done_by) : ""}` : `ship by ${esc(fmtDay(shipBy(o)))}`;
+    return `<div class="donerow"><div class="donerow-t"><button type="button" class="dname" data-donetog="${o.id}" aria-expanded="${open}">${esc(o.customer)}</button>${(o.platform || []).map((p) => `<span class="np np-${platColor(p)}">${esc(p)}</span>`).join("")}<span class="sub">${plural(n, "item")} · ${when}</span><button type="button" class="btn ghost mini" data-doneundo="${o.id}" ${busy ? "disabled" : ""}>${busy ? "Saving…" : "Undo"}</button></div>
+      ${err ? `<div class="err">${esc(err)}</div>` : ""}
+      ${open ? `<div class="sub">${[o.order_number ? "#" + esc(o.order_number) : "", o.state ? esc(o.state) : "", o.shipping_number ? "Ship # " + esc(o.shipping_number) : "", o.order_date ? "Ordered " + esc(fmtDay(o.order_date)) : ""].filter(Boolean).join(" · ")}</div><ul class="donelines">${lines.map((l) => `<li>${Number(l.qty) > 1 && !/^\d/.test(cleanText(l.text)) ? l.qty + " × " : ""}${esc(cleanText(l.text))}${l.note ? ` <span class="sub">(${esc(l.note)})</span>` : ""}</li>`).join("") || '<li class="sub">No items</li>'}</ul>` : ""}</div>`;
+  };
+  box.innerHTML = `<div class="card donelist">${groups.map((g) => `<section class="doneday"><h3>${esc(lab(g.k))}<span class="sub">${plural(g.list.length, "order")}</span></h3>${g.list.map(row).join("")}</section>`).join("")}
+    ${list.length > shown.length ? `<button type="button" class="btn ghost" data-donemore>Show ${Math.min(40, list.length - shown.length)} more of ${list.length - shown.length}</button>` : ""}</div>`;
+}
+
 // Thin scrollbar above the column board, kept in step with the board's own horizontal scroll.
 function binScrollbar(bar, board) {
   const track = bar.firstElementChild; let lock = false;
@@ -355,7 +384,8 @@ function binScrollbar(bar, board) {
 
 function binWire() {
   const box = $("#binList");
-  $("#binSearch").oninput = binRender; $("#binPlat").onchange = binRender;
+  $("#binSearch").oninput = () => { BIN.doneLimit = 40; binRender(); }; $("#binPlat").onchange = () => { BIN.doneLimit = 40; binRender(); };
+  document.addEventListener("click", (e) => { const b = e.target.closest("[data-binmode]"); if (!b || BIN.mode === b.dataset.binmode) return; BIN.mode = b.dataset.binmode; BIN.doneLimit = 40; BIN.open = null; BIN.stOpen = null; binRender(); });
   $("#binDays").addEventListener("click", (e) => { const b = e.target.closest("[data-day]"); if (!b) return; const k = b.dataset.day; if (k === "all") BIN.days = []; else BIN.days = BIN.days.includes(k) ? BIN.days.filter((x) => x !== k) : [...BIN.days, k]; binRender(); });
   document.addEventListener("click", (e) => { const b = e.target.closest("[data-binlay]"); if (!b) return; BIN.layout = b.dataset.binlay; try { localStorage.setItem("spood.bin.layout", BIN.layout); } catch (x) {} binRender(); });
   document.addEventListener("click", (e) => { if ((BIN.open || BIN.stOpen) && !e.target.closest(".nmenu,[data-binopen],[data-stopen]")) { BIN.open = null; BIN.stOpen = null; binRender(); } });
@@ -365,6 +395,10 @@ function binWire() {
     const t = e.target;
     let b;
     if ((b = t.closest("[data-undo]"))) { b.disabled = true; undoDone(b.dataset.undo); return; }
+    if ((b = t.closest("[data-donetog]"))) { const id = b.dataset.donetog; if (BIN.doneOpen.has(id)) BIN.doneOpen.delete(id); else BIN.doneOpen.add(id); binRender(); return; }
+    if ((b = t.closest("[data-donemore]"))) { BIN.doneLimit += 40; binRender(); return; }
+    if ((b = t.closest("[data-doneundo]"))) { const o = orderOf(b.dataset.doneundo); if (!o) return; const to = o.done_prev && obPick(o.done_prev) !== "Done" ? obPick(o.done_prev) : "Not started";
+      if (await confirmBox({ title: "Put back on the board?", body: `${esc(o.customer)} goes back to <b>${esc(to)}</b>. Any pieces it took off the shelf go back to Inventory.`, ok: "Put back" })) undoDone(o.id); return; }
     if ((b = t.closest("[data-det]"))) { BIN.pinned[b.dataset.det] = !BIN.pinned[b.dataset.det]; binRender(); return; }
     if ((b = t.closest("[data-obedit]"))) { e.stopPropagation(); openOrderForm(orderOf(b.dataset.obedit)); return; }
     if ((b = t.closest("[data-oeline]"))) { e.stopPropagation(); BIN.open = null; openOrderForm(orderOf(b.dataset.oid), b.dataset.oeline); return; }

@@ -222,6 +222,14 @@ button.ntext{background:none;border:0;padding:0;margin:0;font:inherit;text-align
 .bvstock.out{color:var(--st-print)}
 .ninvfind{justify-self:start;border:0;padding:1px 7px;border-radius:999px;background:color-mix(in srgb,var(--st-out) 14%,transparent);color:var(--st-out);font:600 .72rem/1.4 var(--body)}
 .ncard-f{display:flex;gap:6px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:6px;margin-top:2px;font-size:.78rem;color:var(--muted)}
+.donelist{display:flex;flex-direction:column;gap:12px}
+.doneday h3{margin:0 0 6px;font:800 .95rem var(--display);display:flex;gap:8px;align-items:baseline}.doneday h3 .sub{font:600 .8rem var(--body)}
+.donerow{border-top:1px solid var(--field-line);padding:8px 0;display:flex;flex-direction:column;gap:4px}.doneday .donerow:first-of-type{border-top:0}
+.donerow-t{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.donerow-t .dname{border:0;background:none;color:var(--fg);font:700 .95rem var(--body);padding:0;cursor:pointer;text-align:left}
+.donerow-t .dname::after{content:" ▸";color:var(--muted);font-size:.8rem}.donerow-t .dname[aria-expanded="true"]::after{content:" ▾"}
+.donerow-t .sub{margin-left:auto;white-space:nowrap}
+.donelines{margin:2px 0 0;padding-left:18px;font-size:.88rem}.donelines li{margin:1px 0}
 .binundo{display:flex;flex-direction:column;gap:6px;margin-bottom:10px;padding:10px 12px}.binundo-row{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:.88rem}
 /* modal */
 .obmodal{position:fixed;inset:0;background:rgba(40,16,48,.45);display:flex;align-items:center;justify-content:center;z-index:1000;padding:16px}
@@ -553,11 +561,11 @@ label.allto{display:flex;flex-direction:row;gap:6px;align-items:center;font-size
   <section class="panel" id="tab-bins">
     <div class="card" id="odBinsCard" hidden><div class="row"><h2 id="odTitle">New order</h2><span style="flex:1"></span><button class="btn ghost mini" type="button" id="odClose">Close</button></div><div id="odHost"></div></div>
     <div class="card">
-      <div class="row"><h2>Bin View</h2><span style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" type="button" id="binNew">+ New order</button></span></div>
+      <div class="row"><h2>Bin View</h2><span style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><span class="binlay" role="group" aria-label="Show"><button type="button" data-binmode="open" aria-pressed="true">Open</button><button type="button" data-binmode="done" aria-pressed="false">Done</button></span><button class="btn" type="button" id="binNew">+ New order</button></span></div>
       <div class="sub" id="binStatus">Reading orders…</div>
       <div class="daychips" id="binDays" role="group" aria-label="Ship day"></div>
       <div class="row" style="justify-content:flex-start;gap:8px"><input id="binSearch" type="search" placeholder="Search customer, item or note" aria-label="Search bins" style="flex:1;min-width:160px">
-        <select id="binPlat" aria-label="Platform"><option value="">All platforms</option></select><span class="binlay" role="group" aria-label="Layout"><button type="button" data-binlay="cols" title="One column per ship day">▥ Columns</button><button type="button" data-binlay="rows" title="One row per ship day">☰ Rows</button></span></div>
+        <select id="binPlat" aria-label="Platform"><option value="">All platforms</option></select><span class="binlay" id="binLay" role="group" aria-label="Layout"><button type="button" data-binlay="cols" title="One column per ship day">▥ Columns</button><button type="button" data-binlay="rows" title="One row per ship day">☰ Rows</button></span></div>
       <details class="fold" data-fold="bininvhow"><summary><span class="sub">When do items come out of inventory?</span></summary>
         <div class="sub" style="line-height:1.5;margin-top:6px"><b>Only when the whole order is marked Done.</b> Pieces shown in <b>black</b> (pulled from the shelf) come off the matching Inventory item, once per order. Pieces in red, blue or green were printed fresh for this order and never sat on the shelf, so they don't. Packing and the Ready to Pack / Packing steps leave the counts alone. Undo puts the pieces back.</div></details>
     </div>
@@ -584,7 +592,7 @@ label.allto{display:flex;flex-direction:row;gap:6px;align-items:center;font-size
 <div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
 <div id="modalHost"></div>
 
-<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611021338","./orders.js":"./orders.js?v=2611021338","./printplan.js":"./printplan.js?v=2611021338","./inventory.js":"./inventory.js?v=2611021338"}}</script>
+<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611021646","./orders.js":"./orders.js?v=2611021646","./printplan.js":"./printplan.js?v=2611021646","./inventory.js":"./inventory.js?v=2611021646"}}</script>
 <script type="module">
 import * as db from "./supabase.js";
 import * as orders from "./orders.js";
