@@ -51,6 +51,8 @@ export const readOrders = (status = "all", id = null) => rpc("read_orders", id ?
 export const readOrder = async (id) => { const a = await readOrders("all", id); return Array.isArray(a) && a[0] ? a[0] : null; };
 export const inventoryRows = () => rpc("inventory_rows");
 export const catalogOptions = () => rpc("catalog_options");
+// resolve_lines: what save_order will do with each line text ({text: {status, reason?, sku?, add?}}); read-only
+export const resolveLines = (texts) => rpc("resolve_lines", { p_texts: texts });
 export const updateVariant = async (p) => { const r = await rpc("update_variant", { p }); return Array.isArray(r) ? r[0] : r; };
 export const archiveVariant = (id) => rpc("archive_variant", { p_id: id });
 export const readAppState = (keys = null, known = {}) => rpc("read_app_state", { keys, known });

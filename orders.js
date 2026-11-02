@@ -296,7 +296,8 @@ export function cardHtml(o) {
 export function binRender() {
   const box = $("#binList"); if (!box) return;
   const st = $("#binStatus");
-  if (st) st.textContent = store.err ? "⚠ " + store.err : store.loadedAt ? `${plural(store.open.length, "open order")} · synced ${store.loadedAt.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })} · refreshes every 20 s` : "Reading orders…";
+  const nocat = store.open.reduce((n, o) => n + (o.lines || []).filter((l) => l.match === "unmatched" && !isEncText(l.text)).length, 0);
+  if (st) st.textContent = store.err ? "⚠ " + store.err : store.loadedAt ? `${plural(store.open.length, "open order")}${nocat ? ` · ⚠ ${plural(nocat, "line")} not in the catalog` : ""} · synced ${store.loadedAt.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })} · refreshes every 20 s` : "Reading orders…";
   const sel = $("#binPlat"); if (sel) { const plats = [...new Set(store.orders.flatMap((o) => o.platform || []))].sort(); const cur = sel.value; sel.innerHTML = `<option value="">All platforms</option>` + plats.map((p) => `<option ${p === cur ? "selected" : ""}>${esc(p)}</option>`).join(""); }
   document.querySelectorAll("[data-binlay]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.binlay === BIN.layout)));
   if (!store.loadedAt) return;
@@ -422,9 +423,35 @@ function matchInv(text) { const t = new Set(toks(text.replace(/\([^)]*\)/g, " ")
   for (const r of store.inv) { const nt = toks(r.item).filter((w) => !["the", "a", "and", "set", "hide", "piece"].includes(w)); if (!nt.length) continue; const hit = nt.filter((w) => t.has(w)).length; const sc = hit / nt.length + (hit === nt.length ? 1 : 0) - (nt.length - hit) * .05; if (!best || sc > best.sc) best = { r, sc, full: hit === nt.length }; }
   return best && best.sc >= 0.5 ? best : null; }
 
+/* What the database will do with a free-text line on save (hq.resolve_lines). Cached by text; patched into the row in place. */
+const RES = new Map();
+const resolveWord = (x) => {
+  if (!x) return "Checking…";
+  if (x.status === "variant") return "✓ Matches on save";
+  if (x.status === "creatable") return "✓ Added to the catalog on save";
+  if (x.status === "untracked") return "Not tracked";
+  if (x.status === "heading") return "Enclosure heading";
+  const p = x.add && x.add.product ? x.add.product : "";
+  switch (x.reason) {
+    case "needs color": return "Needs a color";
+    case "color not offered": return `${p || "This piece"} isn't offered in ${[x.add && x.add.color_1, x.add && x.add.color_2].filter(Boolean).join(" + ") || "that color"} — add it in Inventory`;
+    case "unknown color": return `Unknown color: ${(x.unknown || []).join(", ")}`;
+    case "size not offered": return `Not made in ${x.size || "that size"}`;
+    case "ambiguous product": return "Which piece? Pick one";
+    case "custom size for a product without one": return "No custom size for this piece";
+    default: return "Not in the catalog";
+  }
+};
+function resolvePending(host) {
+  const f = F.form; if (!f) return;
+  const todo = [...new Set(f.lines.filter((l) => !l.inv && !l.untracked && !isEncText(l.text) && l.text.trim() && !RES.has(l.text.trim())).map((l) => l.text.trim()))];
+  const paint = () => { if (F.form !== f) return; host.querySelectorAll("[data-k]").forEach((row) => { const l = f.lines[+row.dataset.k]; const el = row.querySelector(".flag"); if (!l || !el) return; const x = RES.get(l.text.trim()); el.textContent = resolveWord(x); el.classList.toggle("ok", !!x && ["variant", "creatable", "untracked"].includes(x.status)); }); };
+  if (!todo.length) { paint(); return; }
+  db.resolveLines(todo).then((res) => { for (const t of todo) RES.set(t, (res && res[t]) || { status: "unresolved" }); paint(); }).catch(() => { for (const t of todo) RES.set(t, { status: "unresolved" }); paint(); });
+}
 function lineRowHtml(l, i) {
   const r = l.inv ? store.invById.get(l.inv) : null; const q = Number(l.qty) || 1;
-  const flag = r ? `<small>${esc(r.collection || "")}${r.in_stock != null ? ` · ${r.in_stock} on shelf` : " · not tracked"}${l.print_state ? ` · <b>${esc(LAB[l.print_state] || l.print_state)}</b>` : ""}${l.packed ? " · packed" : ""}</small>` : l.untracked ? `<small>Not tracked (plants, extras)</small>` : isEncText(l.text) ? `<small>Enclosure heading</small>` : `<small><span class="flag">Not in the catalog</span>${(() => { const m = matchInv(l.text); return m ? ` <button type="button" class="btn ghost mini" data-use="${i}" data-inv="${m.r.id}">Use “${esc(m.r.item)}”</button>` : ""; })()}</small>`;
+  const flag = r ? `<small>${esc(r.collection || "")}${r.in_stock != null ? ` · ${r.in_stock} on shelf` : " · not tracked"}${l.print_state ? ` · <b>${esc(LAB[l.print_state] || l.print_state)}</b>` : ""}${l.packed ? " · packed" : ""}</small>` : l.untracked ? `<small>Not tracked (plants, extras)</small>` : isEncText(l.text) ? `<small>Enclosure heading</small>` : `<small><span class="flag">${esc(resolveWord(RES.get(l.text.trim())))}</span>${(() => { const m = matchInv(l.text); return m ? ` <button type="button" class="btn ghost mini" data-use="${i}" data-inv="${m.r.id}">Use “${esc(m.r.item)}”</button>` : ""; })()}</small>`;
   return `<div class="line" data-k="${i}" ${l.uid ? `data-uid="${l.uid}"` : ""}><div class="nm ta"><input class="li-text" data-l="${i}" data-lf="text" value="${esc(l.text)}" autocomplete="off" aria-label="Item ${i + 1}" placeholder="Type an item name"><div class="ta-list" hidden></div>${flag}</div>
     <input type="number" min="1" max="99" value="${q}" data-l="${i}" data-lf="qty" aria-label="Quantity">
     <div class="szc"><label class="utk"><input type="checkbox" data-l="${i}" data-lf="untracked" ${l.untracked ? "checked" : ""}> Not tracked</label></div>
@@ -462,6 +489,7 @@ function formRender() {
       <button type="button" class="btn ghost" data-act="cancel">Cancel</button><button type="button" class="btn accent" data-act="save" ${F.busy ? "disabled" : ""}>${F.busy ? "Saving…" : f.id ? "Save changes" : "Save order"}</button></div>
   </div>`;
   wireForm(host, custs);
+  resolvePending(host);
 }
 function pasteHtml() {
   const r = F.review;
