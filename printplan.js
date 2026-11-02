@@ -49,13 +49,13 @@ function rebuildCatalog() {
 }
 
 /* ---------- state ---------- */
-const SHARED = ["seq", "lanes", "pendingStock", "binSync", "hoursPerDay", "batchMin", "restockWeeks", "keep", "times", "printers6"];
-function freshShared() { return { v: 3, seq: 0, hoursPerDay: 12, batchMin: 3, restockWeeks: 1, keep: {}, times: {}, lanes: Object.fromEntries(PRINTERS.map((p) => [p, []])), binSync: {}, pendingStock: {}, printers6: 1 }; }
+const SHARED = ["seq", "lanes", "pendingStock", "binSync", "binStock", "hoursPerDay", "batchMin", "restockWeeks", "keep", "times", "printers6"];
+function freshShared() { return { v: 3, seq: 0, hoursPerDay: 12, batchMin: 3, restockWeeks: 1, keep: {}, times: {}, lanes: Object.fromEntries(PRINTERS.map((p) => [p, []])), binSync: {}, binStock: {}, pendingStock: {}, printers6: 1 }; }
 let state = freshShared(); let VERSION = null; let loaded = false; let loadErr = ""; let planAt = 0; // when this tab last asked the server for its plan copy (and got it)
 let ui = { view: "needs", ahead: 3, sort: null, openGroups: [], openColors: [], stockFormFor: null, startAt: "08:00", picks: {}, q: "", due: "all", hideShelf: false, commitMode: "new", gapAll: false, batchOpen: false, editTimeFor: null };
 try { const u = JSON.parse(localStorage.getItem(UI_KEY) || "null"); if (u) ui = { ...ui, ...u }; } catch (e) {}
 const persistUi = () => { try { localStorage.setItem(UI_KEY, JSON.stringify(ui)); } catch (e) {} };
-function adopt(value) { const s = freshShared(); for (const k of SHARED) if (value && value[k] !== undefined) s[k] = value[k]; PRINTERS.forEach((p) => { s.lanes[p] ||= []; }); s.keep ||= {}; s.times ||= {}; s.binSync ||= {}; s.pendingStock ||= {}; return s; }
+function adopt(value) { const s = freshShared(); for (const k of SHARED) if (value && value[k] !== undefined) s[k] = value[k]; PRINTERS.forEach((p) => { s.lanes[p] ||= []; }); s.keep ||= {}; s.times ||= {}; s.binSync ||= {}; s.binStock ||= {}; s.pendingStock ||= {}; return s; }
 
 export async function loadPlan(force = false) {
   const asked = Date.now();
@@ -267,22 +267,33 @@ function binDesired() {
     else if (b.state === B.REVIEW) { const d = it.dest || (it.pieceId ? "piece:" + it.pieceId : ""); if (d.startsWith("piece:")) bump(d.slice(6), "printed"); }
     else if (b.state === B.DONE) { if (it.outcome?.to === "piece") bump(it.outcome.pieceId, "printed"); }
   }
-  const out = {}; for (const [k, r] of Object.entries(per)) out[k] = r.printed >= r.qty ? "printed" : "printing"; return out;
+  // stock pieces printing (or printed, awaiting finalize) count for the open lines that still need that item — soonest ship date first, then order listing
+  const inBatch = new Set(); for (const { batch: b } of allBatches()) for (const it of b.items) { if (it.pieceId) inBatch.add(it.pieceId); const d = b.state === B.REVIEW ? it.dest || "" : b.state === B.DONE && it.outcome?.to === "piece" ? "piece:" + it.outcome.pieceId : ""; if (d.startsWith("piece:")) inBatch.add(d.slice(6)); }
+  const stock = {}; const stockKey = (sp) => groupKey(sp) + "|" + norm(sizeBucket(sp.size));
+  for (const { batch: b } of allBatches()) for (const it of b.items) { if (it.pieceId) continue; const kind = b.state === B.PRINTING ? "printing" : b.state === B.REVIEW && (it.dest || "stock") === "stock" ? "printed" : ""; if (!kind) continue; const r = (stock[stockKey(it.spec)] ||= { printing: 0, printed: 0 }); r[kind]++; }
+  const fromStock = {};
+  if (Object.keys(stock).length) for (const o of ORDERS) for (const p of o.pieces) {
+    const r = stock[stockKey(p)]; if (!r || !(r.printing + r.printed)) continue; if (inBatch.has(p.id) || p.onShelf) continue;
+    const L = LINE_BY_UID.get(p.line); const ours = state.binStock?.[p.line] && L && L.l.print_src === "plan" && !L.l.packed;
+    if (p.bin !== "print" && !ours) continue;
+    const kind = r.printed ? "printed" : "printing"; r[kind]--; bump(p.id, kind); fromStock[p.line] = 1;
+  }
+  const out = {}; for (const [k, r] of Object.entries(per)) out[k] = r.printed >= r.qty ? "printed" : "printing"; out.__stock = fromStock; return out;
 }
 let syncing = false;
 async function syncBin() {
   if (!loaded || !store.loadedAt || syncing) return;
-  const want = binDesired(); const had = (state.binSync ||= {}); const push = []; const told = [];
+  const want = binDesired(); const had = (state.binSync ||= {}); const push = []; const told = []; const fromStock = want.__stock || {}; delete want.__stock; const stk = (state.binStock ||= {});
   for (const k of new Set([...Object.keys(want), ...Object.keys(had)])) {
     const d = want[k] || null, s = had[k] || null; if (d === s) continue;
     const L = LINE_BY_UID.get(k); const cur = L ? (L.l.packed ? "done" : L.l.print_state || "") : null;
     if (d) { if (cur != null && ((BIN_RANK[cur] ?? 0) < BIN_RANK[d] || (s && cur === s))) push.push({ uid: k, print_state: d, print_src: "plan", oid: L.o.id }); told.push([k, d]); }
-    else { if (cur != null && cur === s) push.push({ uid: k, print_state: "print", print_src: "plan", oid: L.o.id }); told.push([k, null]); }
+    else { if (cur != null && cur === s) push.push({ uid: k, print_state: stk[k] ? "" : "print", print_src: "plan", oid: L.o.id }); told.push([k, null]); } // a stock-covered line goes back to automatic: on the shelf once the batch is finalized
   }
   // a Printing the plan set, for a piece no longer on any printer, goes back to needs printing — only when this tab's plan copy was fetched after its orders were,
   // otherwise a stale copy would undo a batch another tab just queued (the page refreshes orders first, then the plan, so every refresh qualifies)
   if (planAt >= store.loadedAt.getTime()) for (const [k, L] of LINE_BY_UID) if (L.l.print_state === "printing" && L.l.print_src === "plan" && !want[k] && !had[k] && !push.some((x) => x.uid === k)) push.push({ uid: k, print_state: "print", print_src: "plan", oid: L.o.id });
-  const note = () => { for (const [k, d] of told) { if (d) had[k] = d; else delete had[k]; } };
+  const note = () => { for (const [k, d] of told) { if (d) { had[k] = d; if (fromStock[k]) stk[k] = 1; else delete stk[k]; } else { delete had[k]; delete stk[k]; } } };
   if (!push.length) { if (told.length) { note(); persist(); } return; }
   syncing = true;
   try { await db.setLineState(push.map(({ oid, ...x }) => x)); note(); persist(); setErr("plan", ""); }
