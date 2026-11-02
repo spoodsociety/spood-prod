@@ -89,6 +89,7 @@ export function linePayload(l) {
   const out = { text: l.text, qty: Number(l.qty) || 1 };
   if (l.uid) out.uid = l.uid;
   if (l.note) out.note = l.note;
+  if (l.tag) out.tag = l.tag;
   if (l.variant_id != null && l.variant_id !== "") out.variant_id = l.variant_id;
   else if (l.notion_inventory_id) out.notion_inventory_id = l.notion_inventory_id;
   if (l.match === "untracked" || l.untracked) out.untracked = true;

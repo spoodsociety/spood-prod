@@ -249,7 +249,13 @@ button.ntext{background:none;border:0;padding:0;margin:0;font:inherit;text-align
 .od .lines{display:flex;flex-direction:column;gap:10px}
 .od .line{padding:12px 14px;background:var(--surface);border-radius:20px;box-shadow:var(--bub-sm);border:1px solid var(--hi)}
 .od .line .nm{min-width:0;display:flex;flex-direction:column;gap:3px;align-items:flex-start}
-.od .line .pname{font-weight:700;line-height:1.25}
+.od .line .pname{font-weight:700;line-height:1.25;display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center}
+.od .tags{display:inline-flex;gap:4px}
+.od .tagbtn{border:0;background:var(--field);color:var(--muted);font:700 .7rem var(--body);border-radius:999px;padding:3px 9px;cursor:pointer;line-height:1.3;opacity:.7}
+.od .tagbtn:hover{opacity:1}
+.od .tagbtn[aria-pressed="true"]{opacity:1;background:var(--accent-soft);color:var(--accent)}
+.od .line.t-gift{background:color-mix(in srgb,var(--n-green-bg) 45%,var(--surface))}
+.od .line.t-addon{background:color-mix(in srgb,var(--accent-soft) 55%,var(--surface))}
 .od .line .nm small{color:var(--muted);font-size:.78rem;font-weight:600}
 .od .line input,.od .line select{height:44px;padding:6px 12px;border-radius:12px;width:100%;font-size:.95rem}
 .od .line .li-note{font-size:.9rem}
