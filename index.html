@@ -173,7 +173,7 @@ details.fold:not([open])>summary::after{transform:rotate(-90deg)}
 .nline>.nmenu{grid-column:1/-1}
 .ntext{min-width:0;overflow-wrap:anywhere;line-height:1.4}
 button.ntext{background:none;border:0;padding:0;margin:0;font:inherit;text-align:left;cursor:pointer;color:inherit}button.ntext:hover{text-decoration:underline dotted}
-.npack{appearance:none;-webkit-appearance:none;width:15px;height:15px;margin:5px 0 0;border:1.5px solid var(--muted);border-radius:4px;background:var(--bg);display:grid;place-content:center;cursor:pointer}
+.npack{appearance:none;-webkit-appearance:none;box-sizing:border-box;width:15px;height:15px;min-width:0;padding:0;margin:5px 0 0;border:1.5px solid var(--muted);border-radius:4px;background:var(--bg);box-shadow:none;display:grid;place-content:center;cursor:pointer;font-size:0;line-height:0}
 .npack:checked{background:var(--muted);border-color:var(--muted)}
 .npack:checked::after{content:"";width:8px;height:4px;border:2px solid #fff;border-top:0;border-right:0;transform:rotate(-45deg) translate(1px,-1px)}
 .npack:disabled{border-style:dashed;opacity:.55;background:transparent;cursor:not-allowed}
@@ -556,7 +556,7 @@ label.allto{display:flex;flex-direction:row;gap:6px;align-items:center;font-size
 <div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
 <div id="modalHost"></div>
 
-<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611020905","./orders.js":"./orders.js?v=2611020905","./printplan.js":"./printplan.js?v=2611020905","./inventory.js":"./inventory.js?v=2611020905"}}</script>
+<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611020908","./orders.js":"./orders.js?v=2611020908","./printplan.js":"./printplan.js?v=2611020908","./inventory.js":"./inventory.js?v=2611020908"}}</script>
 <script type="module">
 import * as db from "./supabase.js";
 import * as orders from "./orders.js";
