@@ -225,6 +225,9 @@ button.ntext{background:none;border:0;padding:0;margin:0;font:inherit;text-align
 .od .line{padding:8px 0;border-top:1px solid var(--line)}
 .od .line .nm{min-width:0;display:flex;flex-direction:column;gap:2px}
 .od .line .nm small{color:var(--muted);font-size:.78rem}
+.od .line .li-note{height:32px;font-size:.84rem;background:var(--well)}
+.od .line .li-note::placeholder{color:var(--muted);opacity:.7}
+.bvnote{font-style:italic}
 .od .line input,.od .line select{height:40px;padding:6px 10px;border-radius:12px;width:100%}
 .od .line .x{border:0;background:none;color:var(--muted);font-size:1.2rem;cursor:pointer}
 .od .line .x:hover{color:var(--bad)}
@@ -539,7 +542,7 @@ label.allto{display:flex;flex-direction:row;gap:6px;align-items:center;font-size
 <div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
 <div id="modalHost"></div>
 
-<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611012047","./orders.js":"./orders.js?v=2611012047","./printplan.js":"./printplan.js?v=2611012047","./inventory.js":"./inventory.js?v=2611012047"}}</script>
+<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611012053","./orders.js":"./orders.js?v=2611012053","./printplan.js":"./printplan.js?v=2611012053","./inventory.js":"./inventory.js?v=2611012053"}}</script>
 <script type="module">
 import * as db from "./supabase.js";
 import * as orders from "./orders.js";

@@ -243,6 +243,7 @@ function lineHtml(o, l) {
   const name = r ? splitName(r.item) : null; const label = head ? encHead(l.text) : (qty > 1 ? qty + " × " : "") + (name ? name.base + (name.size || name.color ? ` (${[name.size, name.color].filter(Boolean).join(", ")})` : "") : cleanText(l.text).replace(/^\d{1,2}\s*[x×]?\s+(?=[a-z])/i, ""));
   const icon = e.st === "packed" ? "" : e.st === "printing" ? SV(IC.run, "f-run") : e.st === "printed" ? SV(IC.done, "f-done") : e.st === "shelf" ? SV(IC.shelf, "f-shelf") : e.st === "out" ? SV(IC.out, "f-out") : "";
   const sub = e.st === "out" ? `<span class="bvsub">${(r && Number(r.in_stock) > 0 ? "Reserved for earlier orders" : "Out of stock")}${e.a ? ` · ${e.a} of ${qty} on the shelf` : ""}</span>` : e.part ? `<span class="bvsub">${e.a} of ${qty} on the shelf · print ${qty - e.a}</span>` : (l.match === "unmatched" && !head ? `<span class="bvsub">Not in the catalog</span>` : "");
+  const noteHtml = l.note ? `<span class="bvsub bvnote">${esc(l.note)}</span>` : "";
   const tip = `${e.st === "packed" ? "Packed" : LAB[e.st] || ""}${l.state_by ? " · " + l.state_by : ""}\nOrder says: ${cleanText(l.text)}`;
   const box = `<input type="checkbox" class="npack" data-pack="${key}" data-oid="${o.id}" data-from="${pull ? "shelf" : "print"}" ${l.packed ? "checked" : ""} ${packable && !busy ? "" : "disabled"} aria-label="Packed: ${esc(cleanText(l.text))}" title="${packable ? "Packed" : "Mark it printed or pull it from the shelf before packing"}">`;
   const dot = (e.st === "print" || e.st === "printing") && !l.packed ? `<button type="button" class="bvst" data-binopen="${key}" aria-label="${LAB[e.st]}: change status" tabindex="-1"></button>` : "";
@@ -266,7 +267,7 @@ function lineHtml(o, l) {
     menu = `<div class="nmenu" role="menu" aria-label="Status for ${esc(cleanText(l.text))}">${menu}</div>`;
   }
   const err = store.errs["l:" + key] ? `<div class="err lerr">${esc(store.errs["l:" + key])}</div>` : "";
-  return `<div class="nline ${cls}" data-line="${key}">${dot || box}${text}${stockBubble}${sub}${busy ? `<span class="bvsub">Saving…</span>` : ""}${err}${menu}</div>`;
+  return `<div class="nline ${cls}" data-line="${key}">${dot || box}${text}${stockBubble}${sub}${noteHtml}${busy ? `<span class="bvsub">Saving…</span>` : ""}${err}${menu}</div>`;
 }
 
 export function cardHtml(o) {
@@ -405,7 +406,7 @@ const PLATFORMS = () => [...new Set(["Etsy", "Shopify", "TikTok", "TikTok - LIVE
 const F = { form: null, orig: null, errors: [], review: null, busy: false, focus: null };
 const blank = (pre = {}) => ({ id: null, version: null, customer: "", repeat_customer: false, handle: "", platform: [], order_number: "", shipping_number: "", order_date: isoDay(), ship_by: "", ship_type: "Standard", status: "Not started", important: "", summary: "", state: "", lines: [], ...pre });
 const fromOrder = (o) => ({ id: o.id, version: o.version, customer: o.customer || "", repeat_customer: !!o.repeat_customer, handle: o.handle || "", platform: [...(o.platform || [])], order_number: o.order_number || "", shipping_number: o.shipping_number || "", order_date: o.order_date || "", ship_by: o.ship_by || "", ship_type: o.ship_type || "Standard", status: o.status, important: o.important || "", summary: o.summary || "", state: o.state || "",
-  lines: [...(o.lines || [])].sort((a, b) => a.line_no - b.line_no).map((l) => ({ uid: l.uid, text: cleanText(l.text), qty: Number(l.qty) || 1, inv: l.notion_inventory_id || "", untracked: l.match === "untracked", group_uid: l.group_uid || null, print_state: l.print_state, packed: l.packed })) });
+  lines: [...(o.lines || [])].sort((a, b) => a.line_no - b.line_no).map((l) => ({ uid: l.uid, text: cleanText(l.text), qty: Number(l.qty) || 1, inv: l.notion_inventory_id || "", note: l.note || "", untracked: l.match === "untracked", group_uid: l.group_uid || null, print_state: l.print_state, packed: l.packed })) });
 const snap = (f) => JSON.stringify(f);
 
 export function openOrderForm(order = null, focusUid = null, pre = null) {
@@ -452,7 +453,7 @@ function resolvePending(host) {
 function lineRowHtml(l, i) {
   const r = l.inv ? store.invById.get(l.inv) : null; const q = Number(l.qty) || 1;
   const flag = r ? `<small>${esc(r.collection || "")}${r.in_stock != null ? ` · ${r.in_stock} on shelf` : " · not tracked"}${l.print_state ? ` · <b>${esc(LAB[l.print_state] || l.print_state)}</b>` : ""}${l.packed ? " · packed" : ""}</small>` : l.untracked ? `<small>Not tracked (plants, extras)</small>` : isEncText(l.text) ? `<small>Enclosure heading</small>` : `<small><span class="flag">${esc(resolveWord(RES.get(l.text.trim())))}</span>${(() => { const m = matchInv(l.text); return m ? ` <button type="button" class="btn ghost mini" data-use="${i}" data-inv="${m.r.id}">Use “${esc(m.r.item)}”</button>` : ""; })()}</small>`;
-  return `<div class="line" data-k="${i}" ${l.uid ? `data-uid="${l.uid}"` : ""}><div class="nm ta"><input class="li-text" data-l="${i}" data-lf="text" value="${esc(l.text)}" autocomplete="off" aria-label="Item ${i + 1}" placeholder="Type an item name"><div class="ta-list" hidden></div>${flag}</div>
+  return `<div class="line" data-k="${i}" ${l.uid ? `data-uid="${l.uid}"` : ""}><div class="nm ta"><input class="li-text" data-l="${i}" data-lf="text" value="${esc(l.text)}" autocomplete="off" aria-label="Item ${i + 1}" placeholder="Type an item name"><div class="ta-list" hidden></div><input class="li-note" data-l="${i}" data-lf="note" value="${esc(l.note || "")}" autocomplete="off" aria-label="Note for item ${i + 1}" placeholder="Note"><div class="nmflag">${flag}</div></div>
     <input type="number" min="1" max="99" value="${q}" data-l="${i}" data-lf="qty" aria-label="Quantity">
     <div class="szc"><label class="utk"><input type="checkbox" data-l="${i}" data-lf="untracked" ${l.untracked ? "checked" : ""}> Not tracked</label></div>
     <button type="button" class="x" data-del="${i}" aria-label="Remove item ${i + 1}">✕</button></div>`;
@@ -512,7 +513,7 @@ function reviewPaste(text) {
 }
 function wireForm(host, custs) {
   const f = F.form;
-  const read = () => { host.querySelectorAll("[data-f]").forEach((el) => { const k = el.dataset.f; f[k] = el.type === "checkbox" ? el.checked : el.value; }); host.querySelectorAll("[data-l]").forEach((el) => { const l = f.lines[+el.dataset.l]; if (!l) return; const k = el.dataset.lf; if (k === "qty") l.qty = Math.max(1, Math.min(99, Math.floor(+el.value) || 1)); else if (k === "untracked") l.untracked = el.checked; else if (k === "text") { if (l.text !== el.value) { l.text = el.value; const r = l.inv && store.invById.get(l.inv); if (r && r.item !== el.value) l.inv = ""; } } }); };
+  const read = () => { host.querySelectorAll("[data-f]").forEach((el) => { const k = el.dataset.f; f[k] = el.type === "checkbox" ? el.checked : el.value; }); host.querySelectorAll("[data-l]").forEach((el) => { const l = f.lines[+el.dataset.l]; if (!l) return; const k = el.dataset.lf; if (k === "qty") l.qty = Math.max(1, Math.min(99, Math.floor(+el.value) || 1)); else if (k === "untracked") l.untracked = el.checked; else if (k === "note") l.note = el.value; else if (k === "text") { if (l.text !== el.value) { l.text = el.value; const r = l.inv && store.invById.get(l.inv); if (r && r.item !== el.value) l.inv = ""; } } }); };
   // typeahead
   const ta = (input, list, items, pick) => {
     const show = () => { const q = input.value.trim(); const hits = q ? items(q) : []; if (!hits.length) { list.hidden = true; return; } list.innerHTML = hits.map((h, i) => `<button type="button" data-i="${i}" class="${i === 0 ? "on" : ""}">${h.html}</button>`).join(""); list.hidden = false; list._hits = hits; };
@@ -555,7 +556,7 @@ async function saveForm() {
   F.busy = true; formRender();
   const fields = ["customer", "repeat_customer", "handle", "platform", "order_number", "shipping_number", "order_date", "ship_by", "ship_type", "important", "summary", "state"];
   const orig = JSON.parse(F.orig);
-  const linesOf = (ff) => { const uids = new Set(ff.lines.map((l) => l.uid).filter(Boolean)); return ff.lines.map((l) => { const out = { text: String(l.text).trim(), qty: Number(l.qty) || 1 }; if (l.uid) out.uid = l.uid; if (l.inv) out.notion_inventory_id = l.inv; if (l.untracked && !l.inv) out.untracked = true; if (l.group_uid && uids.has(l.group_uid)) out.group_uid = l.group_uid; return out; }); };
+  const linesOf = (ff) => { const uids = new Set(ff.lines.map((l) => l.uid).filter(Boolean)); return ff.lines.map((l) => { const out = { text: String(l.text).trim(), qty: Number(l.qty) || 1 }; if (l.uid) out.uid = l.uid; if (l.note && l.note.trim()) out.note = l.note.trim(); if (l.inv) out.notion_inventory_id = l.inv; if (l.untracked && !l.inv) out.untracked = true; if (l.group_uid && uids.has(l.group_uid)) out.group_uid = l.group_uid; return out; }); };
   const collections = [...new Set(f.lines.map((l) => (l.inv && store.invById.get(l.inv) || {}).collection).filter(Boolean))];
   try {
     if (!f.id) {
