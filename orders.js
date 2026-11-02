@@ -76,15 +76,15 @@ export const isEncText = (t) => /complete enclosure|^\W*(?:\d+\s+|two\s+|three\s
 const NOT_PRINTED = /starter\s*kit|c[ao]+c+o+n|\bplants?\b|substrate|moss|mystery|magnetic background|figurine|add[- ]?on\b(?!.*\b(hide|ledge|climb|floor|insert|cauldron|bowl|feeder)\b)/i;
 export function lineKind(l) {
   const t = cleanText(l.text);
-  if (isEncText(t) || encRow(l)) return "enc";
+  if (encVar(l) || isEncText(t)) return "enc";
   if (l.match === "untracked") return "stock";
   if (NOT_PRINTED.test(t) && !/\b(hide|ledge|climb|floor|insert|cauldron|bowl|feeder)\b/i.test(t.replace(/starter\s*kit/i, ""))) return "stock";
   return "print";
 }
 export const isCustom = (t) => /custom|\d+(\.\d+)?\s*(cm|mm|in\b|inch|"|”|″)|\d\s*[x×]\s*\d/i.test(String(t || ""));
 export const invRowOf = (l) => (l.notion_inventory_id ? store.invById.get(l.notion_inventory_id) : null) || null;
-// the catalog enclosure a line is matched to ("Enclosure (Small)", "Enclosure Magnetic (Small)")
-export const encRow = (l) => { const r = invRowOf(l); return r && /^enclosure\b/i.test(splitName(r.item).base) ? r : null; };
+// the enclosure variant a line is linked to, from its catalog sku: enclosure-small, enclosure-large, enclosure-small-magnetic
+export const encVar = (l) => { const m = String(l.sku || "").match(/^enclosure-(small|large)(?:-(\w+))?$/i); return m ? { size: m[1].toLowerCase(), opt: (m[2] || "").toLowerCase() } : null; };
 
 // Inventory item names: "Gothic - Web Climb (Small, Black)" -> base, size, color
 export const SIZES = ["Small", "Large", "Sling Size", "Standard", "Custom", "Default Size"];
@@ -217,8 +217,9 @@ function custBadge(name) {
 // glue the icons to the last word so they never wrap onto a line of their own (HQ's .bvglue)
 const glue = (label, icons) => { const m = String(label).match(/^(.*?)(\S+)\s*$/); return m ? `${esc(m[1])}<span class="bvglue">${esc(m[2])}${icons}</span>` : esc(label) + icons; };
 const LAB = { print: "Needs printing", printing: "Printing", printed: "Printed", shelf: "Pull from shelf", packed: "Packed", out: "Out of stock", none: "", head: "" };
-// heading for an enclosure line: size (and magnetic) from the matched catalog item, else from the text
-const encHead = (l) => { const t = cleanText(l.text); const m = t.match(/^(?:(\w+)\s+)?(?:complete\s+)?enclosure(s)?/i) || []; const n = Number(l.qty) > 1 ? Number(l.qty) : { two: 2, three: 3, four: 4 }[String(m[1] || "").toLowerCase()] || (/^\d+$/.test(m[1] || "") ? Number(m[1]) : 0); const r = encRow(l); const nm = r ? splitName(r.item) : null; const size = nm ? nm.size : (t.match(/\b(large|small)\b/i) || [])[1] || ""; const mag = nm ? /magnet/i.test(nm.base) : /magnet/i.test(t); return (n ? n + " " : "") + (size ? size.toUpperCase() + " " : "") + (mag ? "MAGNETIC " : "") + "ENCLOSURE" + (n > 1 || m[2] ? "S" : ""); };
+// heading for an enclosure line: size from the linked variant, else from the text; door type as a chip
+const encHead = (l) => { const t = cleanText(l.text); const m = t.match(/^(?:(\w+)\s+)?(?:complete\s+)?enclosure(s)?/i) || []; const n = Number(l.qty) > 1 ? Number(l.qty) : { two: 2, three: 3, four: 4 }[String(m[1] || "").toLowerCase()] || (/^\d+$/.test(m[1] || "") ? Number(m[1]) : 0); const v = encVar(l); const size = v ? v.size : ((t.match(/\b(large|small)\b/i) || [])[1] || "").toLowerCase(); return (n ? n + " " : "") + (size ? size.toUpperCase() + " " : "") + "ENCLOSURE" + (n > 1 || m[2] ? "S" : ""); };
+const encDoor = (l) => { const t = cleanText(l.text); const v = encVar(l); const said = /magnet/i.test(t) ? "magnetic" : /latch/i.test(t) ? "latch" : ""; const door = v ? (v.opt || said) : said; if (!door) return ""; const off = v && said === "magnetic" && v.opt !== "magnetic"; return `<span class="ndoor${off ? " off" : ""}" ${off ? `data-tip="Order says magnet, but it's linked to the ${v.size} ${v.opt || "standard"} enclosure"` : ""}>${door === "magnetic" ? "Magnetic" : "Latch"}${off ? " ?" : ""}</span>`; };
 
 // lines on other open orders holding the same item that's printed/printing/on the shelf (latest ship date first)
 function takeFrom(o, l) {
@@ -271,7 +272,7 @@ function lineHtml(o, l) {
   const box = head ? `<input type="checkbox" class="npack" data-pack="${key}" data-oid="${o.id}" data-from="${pull ? "shelf" : "print"}" ${l.packed ? "checked" : ""} ${packable && !busy ? "" : "disabled"} aria-label="Packed: ${esc(cleanText(l.text))}">`
     : `<span class="bvbox" data-tip="${l.packed ? "Packed" : packable ? "Mark packed" : "Can't pack yet"}"><input type="checkbox" class="npack" data-pack="${key}" data-oid="${o.id}" data-from="${pull ? "shelf" : "print"}" ${l.packed ? "checked" : ""} ${packable && !busy ? "" : "disabled"} aria-label="Packed: ${esc(cleanText(l.text))}"></span>`;
   const dot = (e.st === "print" || e.st === "printing") && !l.packed ? `<button type="button" class="bvst" data-binopen="${key}" aria-label="${LAB[e.st]}: change status" tabindex="-1"></button>` : "";
-  const text = canMark ? `<button type="button" class="ntext" data-binopen="${key}" aria-haspopup="menu" aria-expanded="${open}" data-tip="${esc(tip)}">${glue(label, icon)}</button>` : `<span class="ntext" ${head ? "" : `data-tip="${esc(tip)}"`}>${head ? `<span class="nenc">${esc(label)}</span>` : glue(label, icon)}</span>`;
+  const text = canMark ? `<button type="button" class="ntext" data-binopen="${key}" aria-haspopup="menu" aria-expanded="${open}" data-tip="${esc(tip)}">${glue(label, icon)}</button>` : `<span class="ntext" ${head ? "" : `data-tip="${esc(tip)}"`}>${head ? `<span class="nenc">${esc(label)}</span>${encDoor(l)}` : glue(label, icon)}</span>`;
   const stockBubble = head && r && r.in_stock != null && !l.packed ? (() => { const n = Number(r.in_stock) || 0; const need = owed.get(r.id) || 0; if (e.st === "shelf") return ""; return `<span class="bvstock ${n < 1 ? "out" : ""}" title="${n} ${esc(r.item)} on the shelf, ${need} open orders need one">${SV(IC.shelfunit, "")}${n}</span>`; })() : "";
   const opt = (st, lab, on) => `<button type="button" role="menuitemradio" aria-checked="${!!on}" data-ls="${st}" data-uid="${key}" data-oid="${o.id}" class="nm-${st || "reset"}">${on ? "✓ " : ""}${lab}</button>`;
   const pkOpt = `<button type="button" role="menuitemcheckbox" aria-checked="${!!l.packed}" data-packbtn="${key}" data-oid="${o.id}" data-from="${pull ? "shelf" : "print"}" data-set="${l.packed ? "0" : "1"}" class="nm-pack">${l.packed ? "✓ Packed (tap to unpack)" : "Mark as packed"}</button>`;
