@@ -51,19 +51,20 @@ function rebuildCatalog() {
 /* ---------- state ---------- */
 const SHARED = ["seq", "lanes", "pendingStock", "binSync", "hoursPerDay", "batchMin", "restockWeeks", "keep", "times", "printers6"];
 function freshShared() { return { v: 3, seq: 0, hoursPerDay: 12, batchMin: 3, restockWeeks: 1, keep: {}, times: {}, lanes: Object.fromEntries(PRINTERS.map((p) => [p, []])), binSync: {}, pendingStock: {}, printers6: 1 }; }
-let state = freshShared(); let VERSION = null; let loaded = false; let loadErr = "";
+let state = freshShared(); let VERSION = null; let loaded = false; let loadErr = ""; let planAt = 0; // when this tab last asked the server for its plan copy (and got it)
 let ui = { view: "needs", ahead: 3, sort: null, openGroups: [], openColors: [], stockFormFor: null, startAt: "08:00", picks: {}, q: "", due: "all", hideShelf: false, commitMode: "new", gapAll: false, batchOpen: false, editTimeFor: null };
 try { const u = JSON.parse(localStorage.getItem(UI_KEY) || "null"); if (u) ui = { ...ui, ...u }; } catch (e) {}
 const persistUi = () => { try { localStorage.setItem(UI_KEY, JSON.stringify(ui)); } catch (e) {} };
 function adopt(value) { const s = freshShared(); for (const k of SHARED) if (value && value[k] !== undefined) s[k] = value[k]; PRINTERS.forEach((p) => { s.lanes[p] ||= []; }); s.keep ||= {}; s.times ||= {}; s.binSync ||= {}; s.pendingStock ||= {}; return s; }
 
 export async function loadPlan(force = false) {
+  const asked = Date.now();
   try {
     const rows = await db.readAppState([KEY], force || VERSION == null ? {} : { [KEY]: VERSION });
     const row = Array.isArray(rows) ? rows.find((r) => r.key === KEY) : null;
     if (!row) { if (!loaded) { state = freshShared(); VERSION = 0; } }
     else if (!row.same) { state = adopt(row.value); VERSION = row.version; }
-    loaded = true; loadErr = "";
+    loaded = true; loadErr = ""; planAt = asked;
   } catch (e) { loadErr = db.errText(e); }
   refresh();
 }
@@ -80,7 +81,7 @@ async function flush() {
     if (e instanceof db.RpcError && e.stale) {
       try { const rows = await db.readAppState([KEY], {}); const row = rows.find((x) => x.key === KEY); state = row ? adopt(row.value) : freshShared(); VERSION = row ? row.version : 0;
         for (const a of pending) { try { actions[a.name](...a.args); } catch (x) { console.error(x); } }
-        saving = false; saveErr = ""; persist(); render(); return;
+        saving = false; saveErr = ""; syncBin(); persist(); render(); return;
       } catch (x) { saveErr = db.errText(x); }
     } else saveErr = db.errText(e);
     toast("⚠ Print plan not saved: " + saveErr, true);
@@ -271,18 +272,20 @@ function binDesired() {
 let syncing = false;
 async function syncBin() {
   if (!loaded || !store.loadedAt || syncing) return;
-  const want = binDesired(); const had = (state.binSync ||= {}); const push = [];
+  const want = binDesired(); const had = (state.binSync ||= {}); const push = []; const told = [];
   for (const k of new Set([...Object.keys(want), ...Object.keys(had)])) {
     const d = want[k] || null, s = had[k] || null; if (d === s) continue;
     const L = LINE_BY_UID.get(k); const cur = L ? (L.l.packed ? "done" : L.l.print_state || "") : null;
-    if (d) { if (cur != null && ((BIN_RANK[cur] ?? 0) < BIN_RANK[d] || (s && cur === s))) push.push({ uid: k, print_state: d, print_src: "plan", oid: L.o.id }); had[k] = d; }
-    else { if (cur != null && cur === s) push.push({ uid: k, print_state: "print", print_src: "plan", oid: L.o.id }); delete had[k]; }
+    if (d) { if (cur != null && ((BIN_RANK[cur] ?? 0) < BIN_RANK[d] || (s && cur === s))) push.push({ uid: k, print_state: d, print_src: "plan", oid: L.o.id }); told.push([k, d]); }
+    else { if (cur != null && cur === s) push.push({ uid: k, print_state: "print", print_src: "plan", oid: L.o.id }); told.push([k, null]); }
   }
-  // a Printing the plan set, for a piece no longer on any printer, goes back to needs printing
-  for (const [k, L] of LINE_BY_UID) if (L.l.print_state === "printing" && L.l.print_src === "plan" && !want[k] && !had[k] && !push.some((x) => x.uid === k)) push.push({ uid: k, print_state: "print", print_src: "plan", oid: L.o.id });
-  if (!push.length) return;
+  // a Printing the plan set, for a piece no longer on any printer, goes back to needs printing — only when this tab's plan copy was fetched after its orders were,
+  // otherwise a stale copy would undo a batch another tab just queued (the page refreshes orders first, then the plan, so every refresh qualifies)
+  if (planAt >= store.loadedAt.getTime()) for (const [k, L] of LINE_BY_UID) if (L.l.print_state === "printing" && L.l.print_src === "plan" && !want[k] && !had[k] && !push.some((x) => x.uid === k)) push.push({ uid: k, print_state: "print", print_src: "plan", oid: L.o.id });
+  const note = () => { for (const [k, d] of told) { if (d) had[k] = d; else delete had[k]; } };
+  if (!push.length) { if (told.length) { note(); persist(); } return; }
   syncing = true;
-  try { await db.setLineState(push.map(({ oid, ...x }) => x)); setErr("plan", ""); }
+  try { await db.setLineState(push.map(({ oid, ...x }) => x)); note(); persist(); setErr("plan", ""); }
   catch (e) { setErr("plan", "Print Plan couldn't update Bin View: " + db.errText(e)); toast("⚠ " + store.errs.plan, true); }
   finally { syncing = false; for (const oid of new Set(push.map((x) => x.oid))) await reloadOrder(oid); }
 }

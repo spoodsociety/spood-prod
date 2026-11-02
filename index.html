@@ -593,7 +593,7 @@ label.allto{display:flex;flex-direction:row;gap:6px;align-items:center;font-size
 <div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
 <div id="modalHost"></div>
 
-<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611021725","./orders.js":"./orders.js?v=2611021725","./printplan.js":"./printplan.js?v=2611021725","./inventory.js":"./inventory.js?v=2611021725"}}</script>
+<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611021731","./orders.js":"./orders.js?v=2611021731","./printplan.js":"./printplan.js?v=2611021731","./inventory.js":"./inventory.js?v=2611021731"}}</script>
 <script type="module">
 import * as db from "./supabase.js";
 import * as orders from "./orders.js";
@@ -655,8 +655,8 @@ const upd = document.getElementById("updated");
 orders.onChange(() => { upd.textContent = orders.store.err ? "⚠ " + orders.store.err : orders.store.loadedAt ? `${orders.plural(orders.store.open.length, "open order")} · ${orders.plural(orders.store.inv.length, "inventory item")} · synced ${orders.store.loadedAt.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", second: "2-digit" })}` : "Connecting to Supabase…"; });
 await orders.load();
 
-// refresh: on demand, when the tab comes back, and every 20 s while visible (no local copies of server data are kept between loads)
-const refreshAll = async () => { await Promise.all([orders.load(), plan.loadPlan()]); };
+// refresh: on demand, when the tab comes back, and every 20 s while visible — orders, then the plan (no local copies of server data are kept between loads)
+const refreshAll = async () => { await orders.load(); await plan.loadPlan(); }; // orders first: the plan's Bin View sync trusts a plan copy only when it is newer than the orders
 document.getElementById("refreshBtn").onclick = refreshAll;
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") refreshAll(); });
 setInterval(() => { if (document.visibilityState === "visible" && !document.querySelector(".obmodal") && !document.querySelector("#odHost .od")) refreshAll(); }, 20000);
