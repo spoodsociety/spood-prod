@@ -446,13 +446,13 @@ const resolveWord = (x) => {
 function resolvePending(host) {
   const f = F.form; if (!f) return;
   const todo = [...new Set(f.lines.filter((l) => !l.inv && !l.untracked && !isEncText(l.text) && l.text.trim() && !RES.has(l.text.trim())).map((l) => l.text.trim()))];
-  const paint = () => { if (F.form !== f) return; host.querySelectorAll("[data-k]").forEach((row) => { const l = f.lines[+row.dataset.k]; const el = row.querySelector(".flag"); if (!l || !el) return; const x = RES.get(l.text.trim()); el.textContent = resolveWord(x); el.classList.toggle("ok", !!x && ["variant", "creatable", "untracked"].includes(x.status)); }); };
+  const paint = () => { if (F.form !== f) return; host.querySelectorAll("[data-k]").forEach((row) => { const l = f.lines[+row.dataset.k]; const el = row.querySelector(".flag"); if (!l || !el) return; const x = RES.get(l.text.trim()); el.textContent = resolveWord(x); const ok = !!x && ["variant", "creatable", "untracked"].includes(x.status); el.classList.toggle("ok", ok); const ab = row.querySelector("[data-addcat]"); if (ab) ab.hidden = ok || !x; }); };
   if (!todo.length) { paint(); return; }
   db.resolveLines(todo).then((res) => { for (const t of todo) RES.set(t, (res && res[t]) || { status: "unresolved" }); paint(); }).catch(() => { for (const t of todo) RES.set(t, { status: "unresolved" }); paint(); });
 }
 function lineRowHtml(l, i) {
   const r = l.inv ? store.invById.get(l.inv) : null; const q = Number(l.qty) || 1;
-  const flag = r ? `<small>${esc(r.collection || "")}${r.in_stock != null ? ` · ${r.in_stock} on shelf` : " · not tracked"}${l.print_state ? ` · <b>${esc(LAB[l.print_state] || l.print_state)}</b>` : ""}${l.packed ? " · packed" : ""}</small>` : l.untracked ? `<small>Not tracked (plants, extras)</small>` : isEncText(l.text) ? `<small>Enclosure heading</small>` : `<small><span class="flag">${esc(resolveWord(RES.get(l.text.trim())))}</span>${(() => { const m = matchInv(l.text); return m ? ` <button type="button" class="btn ghost mini" data-use="${i}" data-inv="${m.r.id}">Use “${esc(m.r.item)}”</button>` : ""; })()}</small>`;
+  const flag = r ? `<small>${esc(r.collection || "")}${r.in_stock != null ? ` · ${r.in_stock} on shelf` : " · not tracked"}${l.print_state ? ` · <b>${esc(LAB[l.print_state] || l.print_state)}</b>` : ""}${l.packed ? " · packed" : ""}</small>` : l.untracked ? `<small>Not tracked (plants, extras)</small>` : isEncText(l.text) ? `<small>Enclosure heading</small>` : `<small><span class="flag">${esc(resolveWord(RES.get(l.text.trim())))}</span>${(() => { const m = matchInv(l.text); return m ? ` <button type="button" class="btn ghost mini" data-use="${i}" data-inv="${m.r.id}">Use “${esc(m.r.item)}”</button>` : ""; })()}<button type="button" class="btn ghost mini" data-addcat="${i}">Add to catalog</button></small>`;
   return `<div class="line" data-k="${i}" ${l.uid ? `data-uid="${l.uid}"` : ""}><div class="nm ta"><input class="li-text" data-l="${i}" data-lf="text" value="${esc(l.text)}" autocomplete="off" aria-label="Item ${i + 1}" placeholder="Type an item name"><div class="ta-list" hidden></div><input class="li-note" data-l="${i}" data-lf="note" value="${esc(l.note || "")}" autocomplete="off" aria-label="Note for item ${i + 1}" placeholder="Note"><div class="nmflag">${flag}</div></div>
     <input type="number" min="1" max="99" value="${q}" data-l="${i}" data-lf="qty" aria-label="Quantity">
     <div class="szc"><label class="utk"><input type="checkbox" data-l="${i}" data-lf="untracked" ${l.untracked ? "checked" : ""}> Not tracked</label></div>
@@ -535,6 +535,8 @@ function wireForm(host, custs) {
     const t = e.target; let b;
     if ((b = t.closest("[data-plat]"))) { read(); const p = b.dataset.plat; f.platform = f.platform.includes(p) ? f.platform.filter((x) => x !== p) : [...f.platform, p]; formRender(); return; }
     if ((b = t.closest("[data-del]"))) { read(); f.lines.splice(+b.dataset.del, 1); formRender(); return; }
+    if ((b = t.closest("[data-addcat]"))) { read(); const i = +b.dataset.addcat; const l = f.lines[i]; if (!l) return; const x = RES.get(l.text.trim()) || {}; const a = x.add || {};
+      import("./inventory.js").then(({ addToCatalog }) => addToCatalog({ text: l.text, product: a.product || "", size: a.size || "", color_1: a.color_1 || "", color_2: a.color_2 || "" }, (id, item) => { if (F.form !== f) return; const ln = f.lines[i]; if (ln) { ln.inv = id; ln.untracked = false; } RES.delete(l.text.trim()); formRender(); })); return; }
     if ((b = t.closest("[data-use]"))) { read(); const l = f.lines[+b.dataset.use]; const r = store.invById.get(b.dataset.inv); if (l && r) { l.text = r.item; l.inv = r.id; l.untracked = false; } formRender(); return; }
     if ((b = t.closest("[data-rdel]"))) { F.review.lines.splice(+b.dataset.rdel, 1); formRender(); return; }
     const act = (t.closest("[data-act]") || {}).dataset?.act; if (!act) return;

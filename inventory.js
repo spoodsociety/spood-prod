@@ -183,6 +183,50 @@ async function newItem() {
   };
 }
 
+/* ---------- Add to catalog from an order line: an existing piece in a new size/color, or a brand-new piece. onDone(notion_id, inventory_name) ---------- */
+export async function addToCatalog(pre = {}, onDone = null) {
+  const m = modal(`<h3>Add to catalog</h3><p class="sub">Loading the catalog…</p>`, { label: "Add to catalog" }); const card = m.el.querySelector(".obmodal-card");
+  let opts; try { opts = await options(); } catch (e) { card.innerHTML = `<h3>Add to catalog</h3><p class="err">⚠ ${esc(db.errText(e))}</p><div class="row"><button type="button" class="btn ghost" data-close>Close</button></div>`; card.querySelector("[data-close]").onclick = m.close; return; }
+  const prods = (opts.products || []).filter((p) => !/^(Kit|Set|Enclosure)$/.test(p.category || "") || /set/i.test(p.name)).sort((a, b) => a.name.localeCompare(b.name));
+  const colls = (opts.collections || []); const collName = (id) => (colls.find((c) => c.id === id) || {}).name || "";
+  const cats = (opts.categories || []).filter((c) => !/^(Kit|Set|Enclosure)$/.test(c));
+  const colors = (opts.colors || []).map((c) => c.name).sort((a, b) => a.localeCompare(b));
+  const pick = (list, cur) => list.map((x) => `<option ${x === cur ? "selected" : ""}>${esc(x)}</option>`).join("");
+  const preProd = prods.find((p) => p.name === pre.product) || null;
+  card.innerHTML = `<h3>Add to catalog</h3>${pre.text ? `<p class="sub">Order says: <b>${esc(pre.text)}</b></p>` : ""}<form class="addvar">
+    <div class="srow"><label style="flex:2 1 220px">Piece<select id="acProd"><option value="">Pick a piece…</option>${prods.map((p) => `<option value="${esc(p.id)}" ${preProd && p.id === preProd.id ? "selected" : ""}>${esc(p.name)}${p.collections && p.collections.length ? ` · ${esc(collName(p.collections[0]))}` : ""}</option>`).join("")}<option value="__new">New piece…</option></select></label></div>
+    <div class="srow" id="acNewRow" hidden><label style="flex:2 1 200px">Name<input id="acName" placeholder="e.g. Snowflake Spiral Climb"></label><label>Type<select id="acCat">${pick(cats, "Climb")}</select></label><label>Collection<select id="acColl"><option value="">(none)</option>${pick(colls.map((c) => c.name), "")}</select></label></div>
+    <div class="srow"><label>Size<select id="acSize"></select><input id="acSizeOther" placeholder="Size name" hidden></label>
+      <label>Color<select id="acC1"><option value="">(none)</option>${pick(colors, pre.color_1 || "")}<option value="__other">Other…</option></select><input id="acC1Other" placeholder="Color name" hidden></label>
+      <label id="acC2wrap">Color 2<select id="acC2"><option value="">(none)</option>${pick(colors, pre.color_2 || "")}<option value="__other">Other…</option></select><input id="acC2Other" placeholder="Color name" hidden></label></div>
+    <p class="err" id="acErr"></p><div class="row"><button type="submit" class="btn accent" id="acSave">Add</button><button type="button" class="btn ghost" data-close>Cancel</button></div></form>`;
+  const q = (s) => card.querySelector(s); const err = (t) => { q("#acErr").textContent = t || ""; };
+  const curProd = () => prods.find((p) => p.id === q("#acProd").value) || null;
+  const fillSizes = () => { const p = curProd(); const sizes = [...new Set([...(p ? p.sizes || [] : []), "Small", "Large", "Custom"])]; const want = pre.size && sizes.includes(pre.size) ? pre.size : (sizes.includes("Small") ? "Small" : sizes[0]); q("#acSize").innerHTML = pick(sizes, want) + `<option value="__other">Other…</option>`; };
+  const refresh = () => { const isNew = q("#acProd").value === "__new"; q("#acNewRow").hidden = !isNew; const p = curProd(); const two = isNew ? q("#acCat").value === "Floor Insert" : !!(p && (p.category === "Floor Insert" || (p.offered && p.offered["2"]))); q("#acC2wrap").hidden = !two; fillSizes(); err(""); };
+  card.querySelectorAll("select").forEach((s) => s.addEventListener("change", () => { const o = q("#" + s.id + "Other"); if (o) { o.hidden = s.value !== "__other"; if (!o.hidden) o.focus(); } if (s.id === "acProd" || s.id === "acCat") refresh(); else err(""); }));
+  refresh(); if (pre.size === "Custom") q("#acSize").value = "Custom";
+  q("[data-close]").onclick = m.close; setTimeout(() => (preProd ? q("#acC1") : q("#acProd")).focus(), 30);
+  const val = (id) => { const s = q("#" + id); const v = s.value === "__other" ? q("#" + id + "Other").value.trim() : s.value; return v === "(none)" ? "" : v; };
+  q("form").onsubmit = async (e) => {
+    e.preventDefault(); err("");
+    const isNew = q("#acProd").value === "__new"; const p = curProd();
+    const name = isNew ? q("#acName").value.trim() : (p ? p.name : ""); if (!name) return err(isNew ? "Give the new piece a name." : "Pick a piece.");
+    const size = val("acSize"), c1 = val("acC1"), c2 = q("#acC2wrap").hidden ? "" : val("acC2"); if (!size) return err("Pick or type a size."); if (c2 && !c1) return err("Pick Color 1 first.");
+    const colorLabel = [c1, c2].filter(Boolean).join(" + ");
+    const coll = isNew ? q("#acColl").value : (p && p.collections && p.collections.length ? collName(p.collections[0]) : "");
+    const base = isNew ? `${coll ? coll + " - " : ""}${name}` : ((store.inv.find((r) => (r.sku || "").startsWith(p.id)) || {}).item || `${coll ? coll + " - " : ""}${name}`).split(" (")[0];
+    const inventory_name = `${base} (${[size, colorLabel].filter(Boolean).join(", ")})`;
+    const dup = store.inv.find((r) => r.item.toLowerCase() === inventory_name.toLowerCase()); if (dup) { m.close(); if (onDone) onDone(dup.id, dup.item); return; }
+    const isNewFlags = isNew ? ["product", "size"] : []; if (!isNew && p && !(p.sizes || []).includes(size)) isNewFlags.push("size"); for (const c of [c1, c2]) if (c && !colors.includes(c)) isNewFlags.push("color:" + c);
+    const btn = q("#acSave"); btn.disabled = true; btn.textContent = "Adding…";
+    let r; try { r = await db.addVariant({ product: name, collection: coll || null, category: isNew ? q("#acCat").value : undefined, size, color_1: c1 || null, color_2: c2 || null, inventory_name, new: isNewFlags }); }
+    catch (x) { btn.disabled = false; btn.textContent = "Add"; return err(db.errText(x)); }
+    OPTS = null; m.close(); toast(`Added ${inventory_name}${r.created && r.created.length ? ` (new ${r.created.join(", ")})` : ""}`);
+    await reloadInventory(); if (onDone) onDone(r.notion_id, inventory_name); else { openV = r.notion_id; render(); }
+  };
+}
+
 /* ---------- Edit an item: name and note (update_variant), or remove it (archive_variant, only at 0 on the shelf) ---------- */
 function editItem(v) {
   const m = modal(`<h3>Edit item</h3><form class="addvar"><div class="srow"><label style="flex:1 1 100%">Name<input id="eName" value="${esc(v.r.item)}" required></label></div>
