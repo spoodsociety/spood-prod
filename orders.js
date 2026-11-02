@@ -335,7 +335,18 @@ export function binRender() {
   if (!list.length) { box.innerHTML = undoHtml + `<div class="card"><div class="empty">${all.length ? "No orders match." : "Bin View is empty. Nothing to pack."}</div></div>`; return; }
   const cols = []; list.forEach((o) => { const k = shipBy(o); let c = cols.find((x) => x.k === k); if (!c) { c = { k, list: [] }; cols.push(c); } c.list.push(o); });
   const colLab = (k) => (k === NO_DATE ? "No ship date" : new Date(k + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" }));
-  box.innerHTML = undoHtml + `<div class="nboard${BIN.layout === "rows" ? " rows" : ""}">${cols.map((c) => `<section class="ncol ${c.k < today ? "over" : c.k === today ? "today" : ""}"><header><span class="nday">${esc(colLab(c.k))}</span><span class="ncount">${plural(c.list.length, "order")}</span>${c.k < today ? '<span class="np np-red">Overdue</span>' : c.k === today ? '<span class="np np-yellow">Today</span>' : c.k === addDays(today, 1) ? '<span class="np np-blue">Tomorrow</span>' : ""}</header><div class="ncards">${c.list.map(cardHtml).join("")}</div></section>`).join("")}</div>`;
+  const rows = BIN.layout === "rows";
+  box.innerHTML = undoHtml + (rows ? "" : '<div class="nscroll"><div></div></div>') + `<div class="nboard${rows ? " rows" : ""}">${cols.map((c) => `<section class="ncol ${c.k < today ? "over" : c.k === today ? "today" : ""}"><header><span class="nday">${esc(colLab(c.k))}</span><span class="ncount">${plural(c.list.length, "order")}</span>${c.k < today ? '<span class="np np-red">Overdue</span>' : c.k === today ? '<span class="np np-yellow">Today</span>' : c.k === addDays(today, 1) ? '<span class="np np-blue">Tomorrow</span>' : ""}</header><div class="ncards">${c.list.map(cardHtml).join("")}</div></section>`).join("")}</div>`;
+  if (!rows) binScrollbar(box.querySelector(".nscroll"), box.querySelector(".nboard"));
+}
+
+// Thin scrollbar above the column board, kept in step with the board's own horizontal scroll.
+function binScrollbar(bar, board) {
+  const track = bar.firstElementChild; let lock = false;
+  const size = () => { track.style.width = board.scrollWidth + "px"; bar.style.display = board.scrollWidth > board.clientWidth + 1 ? "" : "none"; };
+  const follow = (from, to) => () => { if (lock) return; lock = true; to.scrollLeft = from.scrollLeft; lock = false; };
+  bar.addEventListener("scroll", follow(bar, board)); board.addEventListener("scroll", follow(board, bar));
+  size(); if (typeof ResizeObserver !== "undefined") { const ro = new ResizeObserver(size); ro.observe(board); board.querySelectorAll(".ncol").forEach((c) => ro.observe(c)); }
 }
 
 function binWire() {
