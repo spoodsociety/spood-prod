@@ -76,13 +76,15 @@ export const isEncText = (t) => /complete enclosure|^\W*(?:\d+\s+|two\s+|three\s
 const NOT_PRINTED = /starter\s*kit|c[ao]+c+o+n|\bplants?\b|substrate|moss|mystery|magnetic background|figurine|add[- ]?on\b(?!.*\b(hide|ledge|climb|floor|insert|cauldron|bowl|feeder)\b)/i;
 export function lineKind(l) {
   const t = cleanText(l.text);
-  if (isEncText(t)) return "enc";
+  if (isEncText(t) || encRow(l)) return "enc";
   if (l.match === "untracked") return "stock";
   if (NOT_PRINTED.test(t) && !/\b(hide|ledge|climb|floor|insert|cauldron|bowl|feeder)\b/i.test(t.replace(/starter\s*kit/i, ""))) return "stock";
   return "print";
 }
 export const isCustom = (t) => /custom|\d+(\.\d+)?\s*(cm|mm|in\b|inch|"|”|″)|\d\s*[x×]\s*\d/i.test(String(t || ""));
 export const invRowOf = (l) => (l.notion_inventory_id ? store.invById.get(l.notion_inventory_id) : null) || null;
+// the catalog enclosure a line is matched to ("Enclosure (Small)", "Enclosure Magnetic (Small)")
+export const encRow = (l) => { const r = invRowOf(l); return r && /^enclosure\b/i.test(splitName(r.item).base) ? r : null; };
 
 // Inventory item names: "Gothic - Web Climb (Small, Black)" -> base, size, color
 export const SIZES = ["Small", "Large", "Sling Size", "Standard", "Custom", "Default Size"];
@@ -205,7 +207,7 @@ const SVF = (d) => `<svg viewBox="0 0 24 24" fill="currentColor" stroke="current
 // Repeat-customer marks as in HQ: ★ outline at 2+ order days, filled at 3+, two at 5+; crown at 2+ enclosures bought
 let CUSTSTAT = { at: 0, map: new Map() };
 function custBadge(name) {
-  if (CUSTSTAT.at !== store.loadedAt) { const m = new Map(); for (const o of store.orders) { const k = normName(o.customer); if (!k) continue; let c = m.get(k); if (!c) { c = { days: new Set(), encl: 0 }; m.set(k, c); } c.days.add(o.order_date || String(o.created_at).slice(0, 10)); c.encl += (o.lines || []).filter((l) => isEncText(l.text)).length; } CUSTSTAT = { at: store.loadedAt, map: m }; }
+  if (CUSTSTAT.at !== store.loadedAt) { const m = new Map(); for (const o of store.orders) { const k = normName(o.customer); if (!k) continue; let c = m.get(k); if (!c) { c = { days: new Set(), encl: 0 }; m.set(k, c); } c.days.add(o.order_date || String(o.created_at).slice(0, 10)); c.encl += (o.lines || []).filter((l) => lineKind(l) === "enc").length; } CUSTSTAT = { at: store.loadedAt, map: m }; }
   const c = CUSTSTAT.map.get(normName(name)); const n = c ? c.days.size : 0; const big = c && c.encl >= 2;
   const lvl = n >= 5 ? 3 : n >= 3 ? 2 : n >= 2 ? 1 : 0;
   const rep = lvl ? ` <span class="bvrep l${lvl}" role="img" aria-label="${lvl === 3 ? "Top customer" : "Repeat customer"}, ${n} orders" data-tip="${lvl === 3 ? "Top customer" : "Repeat customer"} · ${n} orders">${lvl === 1 ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${IC.star}</svg>` : lvl === 2 ? SVF(IC.star) : SVF(IC.star) + SVF(IC.star)}</span>` : "";
@@ -215,7 +217,8 @@ function custBadge(name) {
 // glue the icons to the last word so they never wrap onto a line of their own (HQ's .bvglue)
 const glue = (label, icons) => { const m = String(label).match(/^(.*?)(\S+)\s*$/); return m ? `${esc(m[1])}<span class="bvglue">${esc(m[2])}${icons}</span>` : esc(label) + icons; };
 const LAB = { print: "Needs printing", printing: "Printing", printed: "Printed", shelf: "Pull from shelf", packed: "Packed", out: "Out of stock", none: "", head: "" };
-const encHead = (t) => { const m = cleanText(t).match(/^(?:(\w+)\s+)?(?:complete\s+)?enclosure(s)?\s*[-–:]?\s*(large|small)?/i); if (!m) return cleanText(t); const n = { two: 2, three: 3, four: 4 }[String(m[1] || "").toLowerCase()] || (/^\d+$/.test(m[1] || "") ? m[1] : ""); return (n ? n + " " : "") + (m[3] ? m[3].toUpperCase() + " " : "") + "ENCLOSURE" + (m[2] || n ? "S" : ""); };
+// heading for an enclosure line: size (and magnetic) from the matched catalog item, else from the text
+const encHead = (l) => { const t = cleanText(l.text); const m = t.match(/^(?:(\w+)\s+)?(?:complete\s+)?enclosure(s)?/i) || []; const n = Number(l.qty) > 1 ? Number(l.qty) : { two: 2, three: 3, four: 4 }[String(m[1] || "").toLowerCase()] || (/^\d+$/.test(m[1] || "") ? Number(m[1]) : 0); const r = encRow(l); const nm = r ? splitName(r.item) : null; const size = nm ? nm.size : (t.match(/\b(large|small)\b/i) || [])[1] || ""; const mag = nm ? /magnet/i.test(nm.base) : /magnet/i.test(t); return (n ? n + " " : "") + (size ? size.toUpperCase() + " " : "") + (mag ? "MAGNETIC " : "") + "ENCLOSURE" + (n > 1 || m[2] ? "S" : ""); };
 
 // lines on other open orders holding the same item that's printed/printing/on the shelf (latest ship date first)
 function takeFrom(o, l) {
@@ -256,7 +259,7 @@ function lineHtml(o, l) {
   const canMark = kind === "print"; const packable = canPack(l); const pull = e.st === "shelf" || (e.st === "packed" && e.from === "shelf");
   const cls = (e.st === "packed" ? "s-packed " + (e.from === "shelf" ? "s-shelf" : "s-done") : e.st === "print" ? "s-print" : e.st === "printing" ? "s-printing" : e.st === "printed" ? "s-done" : e.st === "shelf" ? "s-shelf" : e.st === "out" ? "s-out" : "") + (head ? " s-head" : "");
   const r = invRowOf(l); const qty = Number(l.qty) || 1;
-  const name = r ? splitName(r.item) : null; const label = head ? encHead(l.text) : (qty > 1 ? qty + " × " : "") + (name ? name.base + (name.size || name.color ? ` (${[name.size, name.color].filter(Boolean).join(", ")})` : "") : cleanText(l.text).replace(/^\d{1,2}\s*[x×]?\s+(?=[a-z])/i, ""));
+  const name = r ? splitName(r.item) : null; const label = head ? encHead(l) : (qty > 1 ? qty + " × " : "") + (name ? name.base + (name.size || name.color ? ` (${[name.size, name.color].filter(Boolean).join(", ")})` : "") : cleanText(l.text).replace(/^\d{1,2}\s*[x×]?\s+(?=[a-z])/i, ""));
   const stIcon = e.st === "packed" ? "" : e.st === "printing" ? SV(IC.run, "f-run") : e.st === "printed" ? SV(IC.done, "f-done") : e.st === "shelf" ? SV(IC.shelf, "f-shelf") : e.st === "out" ? SV(IC.out, "f-out") : "";
   const said = cleanText(l.text); const freeNames = (o.freebie || []).map((f) => normName(f)).filter(Boolean);
   const marks = (l.tag === "addon" || (!l.tag && /add-?on/i.test(said)) ? `<span class="bvtype t-addon" role="img" aria-label="Add-on" data-tip="Add-on">${SVF(IC.tag).replace('fill="currentColor"', 'fill="none"')}</span>` : "")
