@@ -542,7 +542,7 @@ function lineRowHtml(l, i) {
     const colorSel = !pc.any ? `<span class="na">One color</span>` : `<div class="colorpair"><select data-l="${i}" data-lf="c1" aria-label="Color 1">${opt(pc.s1, l.c1)}${others(pc.s1, l.c1)}</select>${pc.two ? `<select data-l="${i}" data-lf="c2" aria-label="Color 2">${opt(pc.s2, l.c2)}${others(pc.s2, l.c2)}</select>` : ""}</div>`;
     const word = pickWord(st); const ok = st.status === "variant" || st.status === "creatable";
     const small = [p && p.collections && p.collections.length ? esc((cat.colls.get(p.collections[0]) || {}).name || "") : "", esc(stockOf(st)), l.option_code && l.option_code !== "standard" ? esc(l.option_code) : "", l.src ? esc({ collection: "from collection", addon: "add-on", repeat: "from a past order", paste: "pasted" }[l.src] || "") : ""].filter(Boolean).join(" · ");
-    return `<div class="line pick${l.tag ? " t-" + l.tag : ""}" data-k="${i}" ${l.uid ? `data-uid="${l.uid}"` : ""}><div class="nm"><span class="pname">${esc(p ? p.name : l.product_id)}${tagBtns(i, l)}</span><small>${small}${state}${packed}</small>${word ? `<span class="flag${ok ? " ok" : ""}">${esc(word)}</span>${st.reason === "color not offered" ? `<button type="button" class="btn ghost mini" data-addcat="${i}">Add to catalog</button>` : ""}` : ""}</div>
+    return `<div class="line pick${l.tag ? " t-" + l.tag : ""}" data-k="${i}" ${l.uid ? `data-uid="${l.uid}"` : ""}><div class="nm"><span class="pname"><span class="ta"><input class="li-prod" data-pl="${i}" value="${esc(p ? p.name : l.product_id)}" data-was="${esc(p ? p.name : l.product_id)}" autocomplete="off" aria-label="Item ${i + 1}"><span class="ta-list" hidden></span></span>${tagBtns(i, l)}</span><small>${small}${state}${packed}</small>${word ? `<span class="flag${ok ? " ok" : ""}">${esc(word)}</span>${st.reason === "color not offered" ? `<button type="button" class="btn ghost mini" data-addcat="${i}">Add to catalog</button>` : ""}` : ""}</div>
       <input type="number" min="1" max="99" value="${q}" data-l="${i}" data-lf="qty" aria-label="Quantity">
       <div class="szc">${sizeSel}</div><div class="clc">${colorSel}</div><div class="ntc">${noteIn}</div>${del}</div>`;
   }
@@ -628,7 +628,7 @@ function formRender() {
     <div class="lines">${f.lines.map(lineRowHtml).join("") || `<div class="empty">No items yet. Pick a collection, an enclosure, an add-on, or search below.</div>`}</div>
     <div class="ta"><label class="f">Add an item<input id="addItem" autocomplete="off" placeholder="Type a name, e.g. web climb"></label><div class="ta-list" hidden></div></div>
     <details class="more" ${F.review ? "open" : ""}><summary>Paste a list instead</summary>${pasteHtml()}</details>
-    <div class="savebar"><div class="errors">${F.errors.map((e) => `<span>${esc(e)}</span>`).join("") || `<span class="sub" style="color:var(--muted);font-weight:500">${f.id ? "Lines keep their printing and packed checks." : "Shelf stock is handed out by ship date; the rest shows as needs printing."}</span>`}</div>
+    <div class="savebar"><div class="errors">${F.errors.map((e) => `<span>${esc(e)}</span>`).join("") || `<span class="sub" style="color:var(--muted);font-weight:500">${f.id ? "Lines keep their printing and packed checks unless the item changes." : "Shelf stock is handed out by ship date; the rest shows as needs printing."}</span>`}</div>
       <button type="button" class="btn ghost" data-act="cancel">Cancel</button><button type="button" class="btn accent" data-act="save" ${F.busy ? "disabled" : ""}>${F.busy ? "Saving…" : f.id ? "Save changes" : "Save order"}</button></div>
   </div>`;
   wireForm(host, custs);
@@ -698,6 +698,11 @@ function wireForm(host, custs) {
   ta(addIn, addIn.closest(".ta").querySelector(".ta-list"), prodHits, (h) => addLine(pickLine(h.p.id, { size_code: encSize(f) || undefined })));
   addIn.addEventListener("keydown", (e) => { if (e.key === "Enter" && addIn.value.trim() && (addIn.closest(".ta").querySelector(".ta-list").hidden)) { e.preventDefault(); const hits = searchProducts(addIn.value); if (hits.length === 1) addLine(pickLine(hits[0].p.id, { size_code: encSize(f) || undefined })); else addLine({ kind: "text", text: addIn.value.trim(), qty: 1, note: "", untracked: false }); } });
   host.querySelectorAll(".li-text").forEach((inp) => ta(inp, inp.closest(".ta").querySelector(".ta-list"), prodHits, (h) => { read(); const i = +inp.dataset.l; const old = f.lines[i]; f.lines[i] = { ...pickLine(h.p.id, { size_code: encSize(f) || undefined }), uid: old.uid, qty: old.qty, note: old.note, group_uid: old.group_uid, print_state: old.print_state, packed: old.packed }; formRender(); }));
+  // change a catalog line's item in place: keeps qty, notes, tag and its place; the old piece's print/pack status doesn't carry over (save_order resets it)
+  host.querySelectorAll(".li-prod").forEach((inp) => { ta(inp, inp.closest(".ta").querySelector(".ta-list"), prodHits, (h) => { read(); const i = +inp.dataset.pl; const old = f.lines[i]; if (!old || h.p.id === old.product_id) { formRender(); return; }
+    const keep = (h.p.size_codes || []).some((s) => s.code === old.size_code) ? old.size_code : encSize(f) || undefined;
+    f.lines[i] = { ...pickLine(h.p.id, { size_code: keep }), uid: old.uid, qty: old.qty, note: old.note, tag: old.tag, group_uid: old.group_uid, src: old.src }; formRender(); });
+    inp.addEventListener("blur", () => setTimeout(() => { if (document.activeElement !== inp) inp.value = inp.dataset.was; }, 150)); });
   host.onchange = async (e) => { const t = e.target;
     if (t.matches("[data-f='collection']")) { const prev = f.collection; read(); const next = f.collection; f.collection = prev;
       if (next && f.lines.some((l) => l.src !== "collection" && l.src !== "enclosure") && !(await confirmBox({ title: "Replace the items?", body: "The collection's pieces replace what's listed now.", ok: "Replace" }))) { formRender(); return; }

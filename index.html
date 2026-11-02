@@ -274,6 +274,7 @@ button.ntext{background:none;border:0;padding:0;margin:0;font:inherit;text-align
 .od .utk input{width:16px;height:16px;padding:0}
 @media (max-width:900px){.od .lhead{display:none}.od .line .na{display:none}.od .line{grid-template-columns:1fr 72px 36px}.od .line .szc,.od .line .clc,.od .line .ntc{grid-column:1/-1}.od .line .x{grid-column:3;grid-row:1}.od .line input[data-lf="qty"]{grid-column:2;grid-row:1}}
 .ta{position:relative}
+.od .line .pname .ta{flex:1 1 220px;min-width:0}.od .line input.li-prod{font-weight:700;background:transparent;border-color:transparent;box-shadow:none;padding-left:6px}.od .line input.li-prod:hover,.od .line input.li-prod:focus{background:var(--surface);border-color:var(--line)}
 .ta-list{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:50;background:var(--surface);border:1px solid var(--line);border-radius:16px;max-height:280px;overflow:auto;box-shadow:0 14px 30px var(--drop)}
 .ta-list button{display:flex;justify-content:space-between;gap:10px;width:100%;text-align:left;border:0;border-bottom:1px solid var(--line);background:transparent;color:var(--fg);font:inherit;padding:9px 12px;cursor:pointer}
 .ta-list button:hover,.ta-list button.on{background:var(--accent-soft)}
@@ -582,7 +583,7 @@ label.allto{display:flex;flex-direction:row;gap:6px;align-items:center;font-size
 <div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
 <div id="modalHost"></div>
 
-<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611021213","./orders.js":"./orders.js?v=2611021213","./printplan.js":"./printplan.js?v=2611021213","./inventory.js":"./inventory.js?v=2611021213"}}</script>
+<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611021216","./orders.js":"./orders.js?v=2611021216","./printplan.js":"./printplan.js?v=2611021216","./inventory.js":"./inventory.js?v=2611021216"}}</script>
 <script type="module">
 import * as db from "./supabase.js";
 import * as orders from "./orders.js";
