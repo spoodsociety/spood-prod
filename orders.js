@@ -261,7 +261,7 @@ function lineHtml(o, l) {
   const marks = (/add-?on/i.test(said) ? `<span class="bvtype t-addon" role="img" aria-label="Add-on" data-tip="Add-on">${SVF(IC.tag).replace('fill="currentColor"', 'fill="none"')}</span>` : "")
     + (freeNames.some((f) => normName(said).includes(f) || f.includes(normName(said))) ? `<span class="bvtype t-free" role="img" aria-label="Freebie" data-tip="Freebie">${SVF(IC.gift).replace('fill="currentColor"', 'fill="none"')}</span>` : "");
   const icon = marks + stIcon;
-  const sub = e.st === "out" ? `<span class="bvsub">${(r && Number(r.in_stock) > 0 ? "Reserved for earlier orders" : "Out of stock")}${e.a ? ` · ${e.a} of ${qty} on the shelf` : ""}</span>` : e.part ? `<span class="bvsub">${e.a} of ${qty} on the shelf · print ${qty - e.a}</span>` : (l.match === "unmatched" && !head ? `<span class="bvsub">Not in the catalog</span>` : "");
+  const sub = e.st === "out" ? `<span class="bvsub">${(r && Number(r.in_stock) > 0 ? "Reserved for earlier orders" : "Out of stock")}${e.a ? ` · ${e.a} of ${qty} on the shelf` : ""}</span>` : e.part ? `<span class="bvsub">${e.a} of ${qty} on the shelf · print ${qty - e.a}</span>` : (l.match === "unmatched" && !head ? `<button type="button" class="ninvfind" data-oeline="${key}" data-oid="${o.id}">Not in catalog</button>` : "");
   const noteHtml = l.note ? `<span class="bvsub bvnote">${esc(l.note)}</span>` : "";
   const tip = `${e.st === "packed" ? "Packed" : LAB[e.st] || ""}${l.state_by ? " · " + l.state_by : ""}\nOrder says: ${cleanText(l.text)}`;
   const box = head ? `<input type="checkbox" class="npack" data-pack="${key}" data-oid="${o.id}" data-from="${pull ? "shelf" : "print"}" ${l.packed ? "checked" : ""} ${packable && !busy ? "" : "disabled"} aria-label="Packed: ${esc(cleanText(l.text))}">`
@@ -301,12 +301,12 @@ export function cardHtml(o) {
   const pin = !!BIN.pinned[o.id];
   const err = store.errs["o:" + o.id] ? `<div class="err">${esc(store.errs["o:" + o.id])}</div>` : "";
   return `<article class="ncard" data-ob="${o.id}">
-    <div class="ncard-t"><button type="button" class="nedit" data-obedit="${o.id}" title="Edit the order">${esc(o.customer)}<span class="nedit-i" aria-hidden="true">✎</span></button>${custBadge(o.customer)}${isExpress(o) ? '<span class="np np-red">Express</span>' : ""}${det ? `<button type="button" class="nsthint" data-det="${o.id}" aria-expanded="${pin}">details${pin ? " ▴" : " ▾"}</button>` : ""}</div>
-    ${det && pin ? `<div class="ndet">${det}</div>` : ""}
+    <div class="ncard-t"><button type="button" class="nedit" data-obedit="${o.id}" title="Edit the order">${esc(o.customer)}<span class="nedit-i" aria-hidden="true">✎</span></button>${custBadge(o.customer)}${isExpress(o) ? '<span class="np np-red">Express</span>' : ""}${det ? `<button type="button" class="ndetails" data-det="${o.id}" aria-expanded="${pin}" title="Hover to peek, click to keep open">details${pin ? " ▴" : " ▾"}</button>` : ""}</div>
+    ${det ? `<div class="ndet${pin ? " pinned" : ""}">${det}</div>` : ""}
     <div class="nprop nstatwrap"><div class="nstatrow"><button type="button" class="np np-${NSTAT[cur] || "gray"} nstat" data-stopen="${o.id}" aria-haspopup="menu" aria-expanded="${BIN.stOpen === o.id}" ${busy ? "disabled" : ""} title="Change order status"><i></i>${esc(cur)}${busy ? " · saving…" : " ▾"}</button>${plats.map((p) => `<span class="np np-${platColor(p)}">${esc(p)}</span>`).join("")}
       ${hint ? (hint.note ? `<span class="nsthint warn" title="${esc(hint.tip)}" role="img" aria-label="${esc(hint.tip)}">!</span>` : `<button type="button" class="nsthint" data-hint="${esc(hint.to)}" data-oid="${o.id}" title="${esc(hint.tip)}">→ ${esc(hint.to)}</button>`) : ""}</div>
       ${BIN.stOpen === o.id && !busy ? `<div class="nmenu nstatmenu" role="menu" aria-label="Order status for ${esc(o.customer)}">${OB_PICK.map((x) => { const lock = x === "Done" && left && x !== cur; return `<button type="button" role="menuitemradio" aria-checked="${x === cur}" data-ost="${esc(x)}" data-oid="${o.id}" ${lock ? "disabled" : ""}>${x === cur ? "✓ " : ""}${esc(x)}${lock ? ` <span class="sub">(pack ${left} more)</span>` : ""}</button>`; }).join("")}</div>` : ""}</div>
-    ${o.important ? `<div class="nprop nimp">${esc(o.important)}</div>` : ""}
+    ${o.important ? (plats.some((p) => /tiktok/i.test(p)) ? `<div class="nprop nimp ntiktok" title="TikTok name">${esc(o.important).split("\n").map((x) => x.trim()).filter(Boolean).join("<br>")}</div>` : `<div class="nprop nimp">${esc(o.important)}</div>`) : ""}
     ${err}
     <div class="nlines">${ordered.map((l) => lineHtml(o, l)).join("") || '<div class="sub">No items on this order.</div>'}</div>
     ${(o.freebie || []).length ? `<div class="sub nfree"><span class="bvtype t-free" aria-hidden="true">${SVF(IC.gift).replace('fill="currentColor"', 'fill="none"')}</span> ${o.freebie.map(esc).join(", ")}</div>` : ""}
@@ -363,6 +363,8 @@ function binWire() {
     if ((b = t.closest("[data-ls]"))) { e.stopPropagation(); const o = orderOf(b.dataset.oid); BIN.open = null; const uid = b.dataset.uid, st = b.dataset.ls; const l = (o.lines || []).find((x) => x.uid === uid); const patch = { print_state: st, print_src: "bin" }; if (l && l.packed && (st === "print" || st === "printing" || st === "nostock")) Object.assign(patch, { packed: false }); setLine(o.id, uid, patch); return; }
     if ((b = t.closest("[data-packbtn]"))) { e.stopPropagation(); BIN.open = null; setLine(b.dataset.oid, b.dataset.packbtn, b.dataset.set === "1" ? { packed: true, packed_from: b.dataset.from } : { packed: false }); return; }
   });
+  box.addEventListener("mouseover", (e) => { const b = e.target.closest("[data-det]"); if (b) b.closest(".ncard").classList.add("dethover"); });
+  box.addEventListener("mouseout", (e) => { const c = e.target.closest(".ncard"); if (c && !c.contains(e.relatedTarget)) c.classList.remove("dethover"); });
   box.addEventListener("change", (e) => { const b = e.target.closest("[data-pack]"); if (!b) return; BIN.open = null; setLine(b.dataset.oid, b.dataset.pack, b.checked ? { packed: true, packed_from: b.dataset.from } : { packed: false }); });
 }
 

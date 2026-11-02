@@ -204,7 +204,12 @@ button.ntext{background:none;border:0;padding:0;margin:0;font:inherit;text-align
 .bvicon.f-run{color:var(--st-run)}.bvicon.f-done{color:var(--st-ok)}.bvicon.f-shelf{color:var(--muted)}.bvicon.f-out{color:var(--st-out)}
 .bvicon.t-free,.bvtype.t-free{color:var(--nc-pink)}.bvicon.t-addon,.bvtype.t-addon{color:var(--accent)}
 .nline.s-head{background:var(--n-purple-bg);border-radius:6px;padding:5px 10px;margin:6px 0 2px;grid-template-columns:auto minmax(0,1fr) auto;row-gap:0}
-.nline.s-head .ntext{color:var(--st-enc)}
+.nline.s-head .ntext{color:var(--st-enc);display:flex;justify-content:center;text-align:center;flex-wrap:wrap}
+.nline.s-head .nenc{white-space:normal;min-width:0}
+.ndetails{font:500 .72rem var(--body);color:var(--muted);background:none;border:0;padding:0 2px;margin-left:4px;cursor:pointer;text-decoration:underline dotted;vertical-align:middle}.ndetails:hover,.ndetails[aria-expanded="true"]{color:var(--fg)}
+.ndet{display:none;flex-direction:column;gap:6px}.ndet.pinned,.ncard.dethover .ndet{display:flex}
+.nimp.ntiktok{color:var(--muted);font-style:italic;font-weight:500;font-size:.74rem;line-height:1.3}
+.nline>.ninvfind{justify-self:start;margin:0;border:0;padding:1px 7px;border-radius:999px;background:color-mix(in srgb,var(--st-out) 14%,transparent);color:var(--st-out);font:600 .72rem/1.4 var(--body);cursor:pointer}
 .nline.s-head .nenc{color:var(--st-enc);font:700 .85rem var(--body);letter-spacing:.02em}
 .nline.s-head .npack{border-color:var(--st-enc)}
 .nline.s-head.s-packed .nenc{text-decoration:line-through}
@@ -556,7 +561,7 @@ label.allto{display:flex;flex-direction:row;gap:6px;align-items:center;font-size
 <div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
 <div id="modalHost"></div>
 
-<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611020908","./orders.js":"./orders.js?v=2611020908","./printplan.js":"./printplan.js?v=2611020908","./inventory.js":"./inventory.js?v=2611020908"}}</script>
+<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611020911","./orders.js":"./orders.js?v=2611020911","./printplan.js":"./printplan.js?v=2611020911","./inventory.js":"./inventory.js?v=2611020911"}}</script>
 <script type="module">
 import * as db from "./supabase.js";
 import * as orders from "./orders.js";
