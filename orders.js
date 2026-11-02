@@ -233,11 +233,11 @@ function queueDialog(o, l) {
   const like = alsoPrint(o, l); const lanes = hooks.lanes ? hooks.lanes() : [];
   const m = modal(`<h3>Printing</h3><p class="sub">${esc(cleanText(l.text))} · ${esc(o.customer)}</p>
     <form class="namebox"><label class="sub">Printer<select id="qPrinter">${lanes.map((x) => `<option value="${x.printer}">Printer ${x.printer}${x.printing ? " · printing" : ""}${x.queued ? ` · ${x.queued} queued` : ""}</option>`).join("")}</select></label>
-    ${like.length ? `<label class="allto"><input type="checkbox" id="qLike" checked> Also queue ${plural(like.length, "like item")} from other orders</label>` : ""}
+    ${like.length ? `<div class="qlike"><div class="sub">Also print for</div>${like.map((x) => `<label class="allto"><input type="checkbox" data-like="${x.l.uid}" checked><span><b>${esc(x.o.customer)}</b>${Number(x.l.qty) > 1 ? ` ×${Number(x.l.qty)}` : ""} <span class="sub">· ships ${esc(dayLabel(shipBy(x.o)))}</span></span></label>`).join("")}</div>` : ""}
     <label class="allto">Extra copies for stock <input type="number" id="qExtra" value="0" min="0" max="50" inputmode="numeric" style="width:4.5em;padding:6px 10px;border-radius:999px"></label>
     <p class="err" id="qErr"></p><div class="row"><button type="submit" class="btn accent">Start printing</button><button type="submit" class="btn ghost" data-go>Start & view queue</button><button type="button" class="btn ghost" data-close>Cancel</button></div></form>`, { label: "Add to print queue" });
   const q = (s) => m.el.querySelector(s); q("[data-close]").onclick = m.close;
-  q("form").onsubmit = (e) => { e.preventDefault(); const go = e.submitter && e.submitter.hasAttribute("data-go"); const uids = [l.uid, ...(q("#qLike") && q("#qLike").checked ? like.map((x) => x.l.uid) : [])]; const extra = Math.max(0, Math.min(50, Math.round(Number(q("#qExtra").value) || 0)));
+  q("form").onsubmit = (e) => { e.preventDefault(); const go = e.submitter && e.submitter.hasAttribute("data-go"); const uids = [l.uid, ...[...m.el.querySelectorAll("[data-like]:checked")].map((c) => c.dataset.like)]; const extra = Math.max(0, Math.min(50, Math.round(Number(q("#qExtra").value) || 0)));
     try { const n = hooks.queue(uids, q("#qPrinter").value, true, extra); m.close(); toast(`${plural(n, "piece")} printing on Printer ${q("#qPrinter").value}${extra ? ` (${extra} for stock)` : ""}`); if (go) document.dispatchEvent(new CustomEvent("spood:printqueue")); } catch (err) { q("#qErr").textContent = err.message; } };
 }
 function alsoPrint(o, l) {
