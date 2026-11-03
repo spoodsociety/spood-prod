@@ -39,7 +39,8 @@ export function confirmBox({ title, body, ok = "OK", danger = false }) {
 /* ===================== store ===================== */
 export const store = { orders: [], open: [], inv: [], invById: new Map(), loadedAt: null, doneAt: null, err: "", errs: {}, listeners: new Set(), busy: new Set() };
 export const onChange = (fn) => { store.listeners.add(fn); return () => store.listeners.delete(fn); };
-export function emit() { for (const fn of store.listeners) { try { fn(); } catch (e) { console.error(e); } } }
+// a screen that fails to draw must say so, not freeze on stale content
+export function emit() { for (const fn of store.listeners) { try { fn(); } catch (e) { console.error(e); toast("⚠ A screen couldn't update: " + ((e && e.message) || e) + " — reload the page", true); } } }
 export const setErr = (key, msg) => { if (msg) store.errs[key] = msg; else delete store.errs[key]; };
 
 // Open orders are small and change all day: every refresh reads them. Done orders are the bulk (hundreds, growing) and only change
@@ -561,9 +562,11 @@ export function openOrderForm(order = null, focusUid = null, pre = null) {
     formRender(); $("#odBinsCard").scrollIntoView({ behavior: "smooth", block: "start" });
     setTimeout(() => { const el = focusUid ? $(`#odHost [data-k][data-uid="${focusUid}"] input`) : $("#odHost #fCustomer"); if (el) el.focus(); }, 60);
   };
-  if (cat.opts) return start();
+  // the catalog is cached for the session; an item another person added since (pick_variant, Inventory) isn't in it yet, so re-read it when a line points at an unknown item
+  const unknown = order && (order.lines || []).some((l) => l.variant_id != null && !cat.varById.get(String(l.variant_id)));
+  if (cat.opts && !cat.stale && !unknown) return start();
   $("#odBinsCard").hidden = false; $("#odHost").innerHTML = `<div class="empty">Loading the catalog…</div>`;
-  loadCatalog().then(start).catch((e) => { $("#odHost").innerHTML = `<div class="err">⚠ ${esc(db.errText(e))}</div>`; });
+  loadCatalog(true).then(start).catch((e) => { $("#odHost").innerHTML = `<div class="err">⚠ ${esc(db.errText(e))}</div>`; });
 }
 function closeForm() { F.form = null; $("#odBinsCard").hidden = true; $("#odHost").innerHTML = ""; }
 
@@ -600,10 +603,12 @@ function lineRowHtml(l, i) {
     <div class="szc"><label class="utk"><input type="checkbox" data-l="${i}" data-lf="untracked" ${l.untracked ? "checked" : ""}> Not tracked</label></div><div class="clc"></div><div class="ntc">${noteIn}</div>${del}</div>`;
 }
 
-/* What the database will do with a free-text line on save (hq.resolve_lines). Cached by text. */
-const RES = new Map();
+/* What the database will do with a free-text line on save (hq.resolve_lines). Cached by text; a failed check is not cached as a verdict. */
+const RES = new Map(); let RES_FAIL_AT = 0;
+const resolveFailed = (todo, e) => { RES_FAIL_AT = Date.now(); for (const t of todo) RES.set(t, { status: "error" }); toast("Couldn't check lines against the catalog: " + db.errText(e), true); };
 const resolveWord = (x) => {
   if (!x) return "Checking…";
+  if (x.status === "error") return "Couldn't check — retrying";
   if (x.status === "variant") return "✓ Matches on save";
   if (x.status === "creatable") return "New in the catalog on save";
   if (x.status === "untracked") return "Not tracked";
@@ -620,9 +625,10 @@ const resolveWord = (x) => {
 };
 function resolvePending(host) {
   const f = F.form; if (!f) return;
+  if (RES_FAIL_AT && Date.now() - RES_FAIL_AT > 8000) { for (const [t, x] of RES) if (x.status === "error") RES.delete(t); RES_FAIL_AT = 0; }
   const todo = [...new Set(f.lines.filter((l) => l.kind === "text" && !l.untracked && !isEncText(l.text) && (l.text || "").trim() && !RES.has(l.text.trim())).map((l) => l.text.trim()))];
-  if (!todo.length) return;
-  db.resolveLines(todo).then((res) => { for (const t of todo) RES.set(t, (res && res[t]) || { status: "unresolved" }); if (F.form === f) formRender(); }).catch(() => { for (const t of todo) RES.set(t, { status: "unresolved" }); if (F.form === f) formRender(); });
+  if (!todo.length) { if (RES_FAIL_AT) setTimeout(() => { if (F.form === f) formRender(); }, 8500); return; }
+  db.resolveLines(todo).then((res) => { for (const t of todo) RES.set(t, (res && res[t]) || { status: "unresolved" }); if (F.form === f) formRender(); }).catch((e) => { resolveFailed(todo, e); if (F.form === f) formRender(); });
 }
 
 function custCard(f, custs) {
@@ -703,7 +709,7 @@ async function reviewPaste(text) {
     else if ((m = s.match(/\s*[x×]\s*(\d{1,3})\s*$/i))) { qty = +m[1]; s = s.slice(0, m.index).trim(); }
     return { raw, text: s, qty }; });
   const todo = [...new Set(parsed.map((p) => p.text).filter((t) => t && !RES.has(t)))];
-  if (todo.length) { try { const res = await db.resolveLines(todo); for (const t of todo) RES.set(t, (res && res[t]) || { status: "unresolved" }); } catch (e) { for (const t of todo) RES.set(t, { status: "unresolved" }); toast(db.errText(e), true); } }
+  if (todo.length) { try { const res = await db.resolveLines(todo); for (const t of todo) RES.set(t, (res && res[t]) || { status: "unresolved" }); } catch (e) { resolveFailed(todo, e); } }
   F.review = { text, lines: parsed.map((p) => ({ raw: p.raw, line: lineFromResolved(p.text, p.qty, RES.get(p.text)) })) };
 }
 // the collection's pieces as form lines (hq.pick_collection); the enclosure line is kept in step with the Enclosure switch

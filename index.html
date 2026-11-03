@@ -593,12 +593,16 @@ label.allto{display:flex;flex-direction:row;gap:6px;align-items:center;font-size
 <div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
 <div id="modalHost"></div>
 
-<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611021922","./orders.js":"./orders.js?v=2611021922","./printplan.js":"./printplan.js?v=2611021922","./inventory.js":"./inventory.js?v=2611021922"}}</script>
+<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611021928","./orders.js":"./orders.js?v=2611021928","./printplan.js":"./printplan.js?v=2611021928","./inventory.js":"./inventory.js?v=2611021928"}}</script>
 <script type="module">
 import * as db from "./supabase.js";
 import * as orders from "./orders.js";
 import * as plan from "./printplan.js";
 import * as inv from "./inventory.js";
+
+// nothing fails silently: an error nobody caught is shown, not just logged
+window.addEventListener("error", (e) => orders.toast("⚠ " + ((e.error && e.error.message) || e.message || "Something went wrong") + " — reload the page if it persists", true));
+window.addEventListener("unhandledrejection", (e) => orders.toast("⚠ " + db.errText(e.reason), true));
 
 // tabs
 const tabs = document.querySelectorAll("nav.tabs button");
