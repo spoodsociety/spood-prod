@@ -286,11 +286,13 @@ let syncing = false;
 async function syncBin() {
   if (!loaded || !store.loadedAt || syncing) return;
   const want = binDesired(); const had = (state.binSync ||= {}); const push = []; const told = []; const fromStock = want.__stock || {}; delete want.__stock; const stk = (state.binStock ||= {});
+  // The line's real state decides, never the memo of what was told before: if a piece is on a printer and its line still says
+  // needs printing (an older tab pushed it back, or the push failed), it is pushed again on every refresh until it matches.
   for (const k of new Set([...Object.keys(want), ...Object.keys(had)])) {
-    const d = want[k] || null, s = had[k] || null; if (d === s) continue;
+    const d = want[k] || null, s = had[k] || null;
     const L = LINE_BY_UID.get(k); const cur = L ? (L.l.packed ? "done" : L.l.print_state || "") : null;
-    if (d) { if (cur != null && ((BIN_RANK[cur] ?? 0) < BIN_RANK[d] || (s && cur === s))) push.push({ uid: k, print_state: d, print_src: "plan", oid: L.o.id }); told.push([k, d]); }
-    else { if (cur != null && cur === s) push.push({ uid: k, print_state: stk[k] ? "" : "print", print_src: "plan", oid: L.o.id }); told.push([k, null]); } // a stock-covered line goes back to automatic: on the shelf once the batch is finalized
+    if (d) { if (cur != null && cur !== d && ((BIN_RANK[cur] ?? 0) < BIN_RANK[d] || (s && cur === s))) push.push({ uid: k, print_state: d, print_src: "plan", oid: L.o.id }); if (d !== s) told.push([k, d]); }
+    else if (s) { if (cur != null && cur === s) push.push({ uid: k, print_state: stk[k] ? "" : "print", print_src: "plan", oid: L.o.id }); told.push([k, null]); } // a stock-covered line goes back to automatic: on the shelf once the batch is finalized
   }
   // a Printing the plan set, for a piece no longer on any printer, goes back to needs printing — only when this tab's plan copy was fetched after its orders were,
   // otherwise a stale copy would undo a batch another tab just queued (the page refreshes orders first, then the plan, so every refresh qualifies)

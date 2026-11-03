@@ -593,7 +593,7 @@ label.allto{display:flex;flex-direction:row;gap:6px;align-items:center;font-size
 <div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
 <div id="modalHost"></div>
 
-<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611022024","./orders.js":"./orders.js?v=2611022024","./printplan.js":"./printplan.js?v=2611022024","./inventory.js":"./inventory.js?v=2611022024"}}</script>
+<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611022041","./orders.js":"./orders.js?v=2611022041","./printplan.js":"./printplan.js?v=2611022041","./inventory.js":"./inventory.js?v=2611022041"}}</script>
 <script type="module">
 import * as db from "./supabase.js";
 import * as orders from "./orders.js";
@@ -666,6 +666,15 @@ const refreshAll = async (all = false) => { await orders.load({ done: all === tr
 document.getElementById("refreshBtn").onclick = () => refreshAll(true);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") refreshAll(); });
 setInterval(() => { if (document.visibilityState === "visible" && !orders.uiBusy()) refreshAll(); }, 20000);
+
+// a tab left open runs old code after a deploy and would keep disagreeing with newer tabs: when a newer version is published, reload once the person is idle
+const myVersion = ((document.querySelector('script[type="importmap"]') || {}).textContent || "").match(/\.js\?v=(\w+)/)?.[1] || "";
+async function checkVersion() {
+  if (!myVersion || document.visibilityState !== "visible") return;
+  try { const t = await (await fetch(location.pathname, { cache: "no-store" })).text(); const v = t.match(/\.js\?v=(\w+)/)?.[1]; if (v && v !== myVersion && !orders.uiBusy()) location.reload(); } catch (e) {}
+}
+setInterval(checkVersion, 300000);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") checkVersion(); });
 </script>
 
 </body></html>
