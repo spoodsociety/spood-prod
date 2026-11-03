@@ -61,9 +61,11 @@ export async function loadPlan(force = false) {
   const asked = Date.now();
   try {
     const rows = await db.readAppState([KEY], force || VERSION == null ? {} : { [KEY]: VERSION });
+    // this tab changed the plan while the read was in flight (or hasn't saved yet): the server copy is behind this screen; flush() reconciles on 'stale'
+    if (loaded && (pending.length || saving || db.lastWriteAt() > asked)) { refresh(); return; }
     const row = Array.isArray(rows) ? rows.find((r) => r.key === KEY) : null;
     if (!row) { if (!loaded) { state = freshShared(); VERSION = 0; } }
-    else if (!row.same) { state = adopt(row.value); VERSION = row.version; }
+    else if (!row.same && (VERSION == null || row.version >= VERSION)) { state = adopt(row.value); VERSION = row.version; }
     loaded = true; loadErr = ""; planAt = asked;
   } catch (e) { loadErr = db.errText(e); }
   refresh();

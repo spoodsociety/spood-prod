@@ -45,9 +45,14 @@ export const setErr = (key, msg) => { if (msg) store.errs[key] = msg; else delet
 
 // Open orders are small and change all day: every refresh reads them. Done orders are the bulk (hundreds, growing) and only change
 // through this app, so they are read once in the background, then only on demand (Done list, Refresh); marking Done / Undo updates one order.
+let loadSeq = 0;
 export async function load({ done = false } = {}) {
+  const started = Date.now(); const seq = ++loadSeq;
   try {
     const [open, doneRows, inv, opts] = await Promise.all([db.readOrders("open"), done ? db.readOrders("done") : null, db.inventoryRows(), cat.opts && !cat.stale ? null : db.catalogOptions()]);
+    // something was saved (or a newer read started) while this read was in flight: this copy is already behind what the screen shows
+    if (seq !== loadSeq) return;
+    if (db.lastWriteAt() > started) { return load({ done }); }
     if (opts) indexCatalog(opts);
     const openList = Array.isArray(open) ? open : []; const openIds = new Set(openList.map((o) => o.id));
     const doneList = (Array.isArray(doneRows) ? doneRows : store.orders.filter((o) => o.status === "Done")).filter((o) => !openIds.has(o.id));
@@ -61,11 +66,12 @@ export async function load({ done = false } = {}) {
   emit();
 }
 export async function reloadOrder(id) {
-  try { const o = await db.readOrder(id); const i = store.orders.findIndex((x) => x.id === id); if (o) { if (i >= 0) store.orders[i] = o; else store.orders.push(o); } else if (i >= 0) store.orders.splice(i, 1); recompute(); }
+  const started = Date.now();
+  try { const o = await db.readOrder(id); if (db.lastWriteAt() > started) return reloadOrder(id); const i = store.orders.findIndex((x) => x.id === id); if (o) { if (i >= 0) store.orders[i] = o; else store.orders.push(o); } else if (i >= 0) store.orders.splice(i, 1); recompute(); }
   catch (e) { store.err = db.errText(e); }
   emit();
 }
-export async function reloadInventory() { try { const [inv, opts] = await Promise.all([db.inventoryRows(), db.catalogOptions()]); indexCatalog(opts); store.inv = Array.isArray(inv) ? inv : []; store.invById = new Map(store.inv.map((r) => [r.id, r])); recompute(); } catch (e) { store.err = db.errText(e); } emit(); }
+export async function reloadInventory() { const started = Date.now(); try { const [inv, opts] = await Promise.all([db.inventoryRows(), db.catalogOptions()]); if (db.lastWriteAt() > started) return reloadInventory(); indexCatalog(opts); store.inv = Array.isArray(inv) ? inv : []; store.invById = new Map(store.inv.map((r) => [r.id, r])); recompute(); } catch (e) { store.err = db.errText(e); } emit(); }
 
 /* ===================== order & line rules ===================== */
 export const isExpress = (o) => /express/i.test(o.ship_type || "");
@@ -208,6 +214,11 @@ export async function undoDone(id) {
 
 /* ===================== Bin View ===================== */
 const BIN = { days: [], open: null, stOpen: null, layout: "cols", pinned: {}, mode: "open", doneOpen: new Set(), doneLimit: 40 };
+// the background refresh waits while a person is in the middle of something: a menu is open, a field has focus, or they touched the page in the last few seconds
+let lastTouch = 0;
+document.addEventListener("pointerdown", () => { lastTouch = Date.now(); }, true);
+document.addEventListener("keydown", () => { lastTouch = Date.now(); }, true);
+export const uiBusy = () => { const a = document.activeElement; return !!(BIN.open || BIN.stOpen || F.form || document.querySelector(".obmodal") || (a && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName) && a.type !== "checkbox") || Date.now() - lastTouch < 4000); };
 try { BIN.layout = localStorage.getItem("spood.bin.layout") || "cols"; } catch (e) {}
 const SV = (d, cls) => `<span class="bvicon ${cls}" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg></span>`;
 const IC = { run: '<path d="M21 12a9 9 0 1 1-18 0a9 9 0 1 1 18 0z"/><path d="M12 7v5l3 2"/>', done: '<path d="M21 12a9 9 0 1 1-18 0a9 9 0 1 1 18 0z"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/>', shelf: '<path d="M3 7l9-4 9 4v10l-9 4-9-4z"/><path d="M3 7l9 4 9-4"/><path d="M12 11v10"/>', out: '<path d="M20 11a8 8 0 0 0-14.9-4"/><path d="M4 4v4h4"/><path d="M4 13a8 8 0 0 0 14.9 4"/><path d="M20 20v-4h-4"/>', shelfunit: '<path d="M4 3v18"/><path d="M20 3v18"/><path d="M4 9h16"/><path d="M4 15h16"/><path d="M4 21h16"/>',
@@ -330,8 +341,15 @@ export function cardHtml(o) {
   </article>`;
 }
 
+// Redrawing the board must not move it: keep the column scroll and the page position across every refresh and click.
 export function binRender() {
   const box = $("#binList"); if (!box) return;
+  const board = box.querySelector(".nboard"); const left = board ? board.scrollLeft : 0; const top = window.scrollY;
+  binDraw(box);
+  const nb = box.querySelector(".nboard"); if (nb && left) nb.scrollLeft = left;
+  if (window.scrollY !== top) window.scrollTo(0, top);
+}
+function binDraw(box) {
   const st = $("#binStatus");
   const nocat = store.open.reduce((n, o) => n + (o.lines || []).filter((l) => l.match === "unmatched" && !isEncText(l.text)).length, 0);
   if (st) st.textContent = store.err ? "⚠ " + store.err : store.loadedAt ? `${plural(store.open.length, "open order")}${nocat ? ` · ⚠ ${plural(nocat, "line")} not in the catalog` : ""} · synced ${store.loadedAt.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })} · refreshes every 20 s` : "Reading orders…";
@@ -641,8 +659,16 @@ function custCard(f, custs) {
     ${past.length ? `<details class="more" ${F.custOpen ? "open" : ""} data-custfold><summary>Past orders (${past.length})</summary><div class="tw"><table class="t"><thead><tr><th>Ship by</th><th>Platform</th><th>Items</th><th></th></tr></thead><tbody>${past.slice(0, 5).map((o) => `<tr><td>${esc(fmtDay(o.ship_by))}${o.order_number ? `<br><span class="sub mono">#${esc(o.order_number)}</span>` : ""}</td><td>${(o.platform || []).map(esc).join(", ")}</td><td>${items(o)}</td><td><button type="button" class="btn ghost mini" data-reorder="${esc(o.id)}">Use these items</button></td></tr>`).join("")}</tbody></table></div>${past.length > 5 ? `<div class="sub">${past.length - 5} older on the Customers tab.</div>` : ""}</details>` : ""}</div>`;
 }
 
+// redrawing the form keeps the field the person is in (and their place on the page): a pick or a tag tap must not drop focus
+const focusKey = (el) => { if (!el || !el.dataset) return ""; const d = el.dataset; if (el.id) return "#" + el.id; if (d.f) return `[data-f="${d.f}"]`; if (d.l != null && d.lf) return `[data-l="${d.l}"][data-lf="${d.lf}"]`; return ""; }; // not the item search box: refocusing it would reopen its list
 function formRender() {
   const f = F.form; if (!f) return; const host = $("#odHost");
+  const a = document.activeElement; const key = host.contains(a) ? focusKey(a) : ""; const sel = key && a.selectionStart != null ? [a.selectionStart, a.selectionEnd] : null; const top = window.scrollY;
+  formDraw(f, host);
+  if (key) { const el = host.querySelector(key); if (el) { el.focus({ preventScroll: true }); if (sel && el.setSelectionRange) { try { el.setSelectionRange(sel[0], sel[1]); } catch (e) {} } } }
+  if (window.scrollY !== top) window.scrollTo(0, top);
+}
+function formDraw(f, host) {
   const plats = PLATFORMS(); const custs = customers();
   const pieces = f.lines.reduce((a, l) => a + (Number(l.qty) || 1), 0);
   const enc = encSize(f); const encP = cat.byProduct.get("enclosure"); const encSizes = encP ? encP.size_codes || [] : [];

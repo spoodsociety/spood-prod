@@ -38,8 +38,13 @@ export class RpcError extends Error {
 }
 export const errText = (e) => (e instanceof RpcError ? e.message : String((e && e.message) || e || "Something went wrong"));
 
+/* when this tab last wrote: a read that started before a write and finished after it is older than what the screen shows, and is thrown away */
+const READS = new Set(["read_orders", "inventory_rows", "catalog_options", "resolve_lines", "read_app_state", "pick_collection"]);
+let writeAt = 0;
+export const lastWriteAt = () => writeAt;
 export async function rpc(fn, args = {}) {
   let res;
+  if (!READS.has(fn)) writeAt = Date.now();
   try { res = await sb.rpc(fn, args); }
   catch (e) { throw new RpcError(fn, { message: "Couldn't reach Supabase: " + ((e && e.message) || e) }); }
   if (res.error) throw new RpcError(fn, res.error);
