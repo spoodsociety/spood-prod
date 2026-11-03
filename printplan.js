@@ -87,7 +87,8 @@ async function flush() {
         saving = false; saveErr = ""; persist(); render(); return;
       } catch (x) { saveErr = db.errText(x); }
     } else saveErr = db.errText(e);
-    toast("⚠ Print plan not saved: " + saveErr, true);
+    toast("⚠ Print plan not saved: " + saveErr + " — retrying", true);
+    setTimeout(persist, 10000); // keep trying: the change stays in this tab until it saves
   }
   saving = false; render();
 }
@@ -498,6 +499,8 @@ export function queueLines(lineUids, printer, start, extra = 0) {
   dispatch("queueFromBin", ids, printer, !!start, extra, spec);
   return ids.length + extra;
 }
+// unsaved plan changes in this tab (a reload would lose them)
+export const planPending = () => pending.length > 0 || saving;
 export function showQueues() { ui.view = "queues"; persistUi(); render(); }
 
 export function init() {

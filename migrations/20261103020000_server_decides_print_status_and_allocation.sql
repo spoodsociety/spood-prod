@@ -115,7 +115,7 @@ begin
   create temp table if not exists _want (uid uuid primary key, printing integer default 0, printed integer default 0) on commit drop;
   create temp table if not exists _stock (inv text primary key, printing integer default 0, printed integer default 0) on commit drop;
   create temp table if not exists _inbatch (uid uuid primary key) on commit drop;
-  delete from _want; delete from _stock; delete from _inbatch;
+  delete from _want where true; delete from _stock where true; delete from _inbatch where true;  -- pg_safeupdate (API roles) refuses a DELETE without WHERE
 
   for b in select x from jsonb_path_query(coalesce(p_plan, '{}'::jsonb), '$.lanes.*[*]') x loop
     v_state := b->>'state';
