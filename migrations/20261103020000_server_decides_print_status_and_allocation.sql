@@ -16,7 +16,6 @@ create or replace function hq.line_kind(p_text text, p_match text, p_product tex
   select case
     when p_product = 'enclosure' or hq.is_enc_line(p_text) then 'enc'
     when p_match = 'untracked' then 'stock'
-    when p_category in ('Add-on', 'Supply', 'Kit', 'Set') then 'stock'
     when coalesce(p_text, '') ~* '(starter\s*kit|c[ao]+c+o+n|\mplants?\M|substrate|moss|mystery|magnetic background|figurine|add[- ]?on\M)'
          and not (regexp_replace(coalesce(p_text, ''), 'starter\s*kit', '', 'gi') ~* '\m(hide|ledge|climb|floor|insert|cauldron|bowl|feeder)\M') then 'stock'
     else 'print' end
@@ -118,7 +117,7 @@ begin
   create temp table if not exists _inbatch (uid uuid primary key) on commit drop;
   delete from _want; delete from _stock; delete from _inbatch;
 
-  for b in select value from jsonb_path_query(coalesce(p_plan, '{}'::jsonb), '$.lanes.*[*]') loop
+  for b in select x from jsonb_path_query(coalesce(p_plan, '{}'::jsonb), '$.lanes.*[*]') x loop
     v_state := b->>'state';
     for it in select value from jsonb_array_elements(coalesce(b->'items', '[]'::jsonb)) loop
       if nullif(it->>'pieceId', '') is not null then
