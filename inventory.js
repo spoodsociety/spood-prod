@@ -69,7 +69,7 @@ function renderPanel() {
     ${panelMode === "count" ? `<div class="big"><button type="button" data-pstep="-1" aria-label="One less">−</button><input id="pcount" inputmode="numeric" value="${v.val ?? ""}" aria-label="On the shelf"><button type="button" data-pstep="1" aria-label="One more">+</button></div>
       <div class="sub" style="text-align:center">Saved count: <b class="mono">${v.stock}</b>${edits.has(v.id) ? ` → <b class="mono">${v.val}</b>` : ""}</div>
       <div class="psave"><button type="button" class="btn" id="psave" ${edits.has(v.id) && !saving ? "" : "disabled"}>${saving ? "Saving…" : edits.has(v.id) ? "Save count" : "No change"}</button>${edits.has(v.id) ? `<button type="button" class="btn ghost mini" id="pundo">Undo</button>` : ""}</div>`
-    : `<form class="adj" id="adjForm"><div class="srow"><label>Change<select id="adjKind"><option value="print">+ Printed for stock</option><option value="return">+ Returned</option><option value="scrap">− Scrapped / broken</option><option value="adjust">± Correction</option></select></label><label>How many<input id="adjQty" type="number" min="1" max="99" value="1" inputmode="numeric"></label></div><div class="srow"><label style="flex:2">Reason <span style="text-transform:none;letter-spacing:0">(optional)</span><input id="adjReason" autocomplete="off"></label></div><div class="srow"><button type="submit" class="btn" id="adjSave" ${saving ? "disabled" : ""}>${saving ? "Saving…" : "Record"}</button><span class="sub">Shelf now <b class="mono">${v.stock}</b></span></div></form>`}
+    : `<form class="adj" id="adjForm"><div class="srow"><label>Change<select id="adjKind"><option value="print">+ Printed for stock</option><option value="return">+ Returned</option><option value="scrap">− Scrapped / broken</option><option value="adjust">+ Correction</option><option value="adjust-">− Correction</option></select></label><label>How many<input id="adjQty" type="number" min="1" max="99" value="1" inputmode="numeric"></label></div><div class="srow"><label style="flex:2">Reason <span style="text-transform:none;letter-spacing:0">(optional)</span><input id="adjReason" autocomplete="off"></label></div><div class="srow"><button type="submit" class="btn" id="adjSave" ${saving ? "disabled" : ""}>${saving ? "Saving…" : "Record"}</button><span class="sub">Shelf now <b class="mono">${v.stock}</b></span></div></form>`}
     ${err ? `<div class="err">${esc(err)}</div>` : ""}
     <div class="facts"><div class="fact"><span>Committed to orders</span><b class="mono">${v.used}</b></div><div class="fact"><span>Free on the shelf</span><b class="mono">${Math.max(0, (v.val || 0) - v.used)}</b></div>${sh ? `<div class="fact short"><span>Short for orders</span><b class="mono">${sh}</b></div>` : ""}<div class="fact"><span>Open orders need</span><b class="mono">${v.need}</b></div></div>
     ${com.length ? `<div class="pcom"><b>Committed to customer orders</b><ul>${com.map((x) => `<li>${esc(String(x.customer).replace(/\s*\*+\s*$/, ""))}${x.qty > 1 ? " ×" + x.qty : ""} <span class="sub">ships ${esc(fmtDay(x.shipBy))}</span></li>`).join("")}</ul><div class="sub" style="margin-top:4px">Still counted on the shelf until the order is marked Done.</div></div>` : ""}`}
@@ -95,7 +95,7 @@ async function saveCounts(ids) {
   saving = false; await reloadInventory(); render();
 }
 async function saveAdjust(v, kind, qty, reason) {
-  const n = Math.max(1, Math.min(99, Math.round(Number(qty) || 0))); const signed = kind === "scrap" ? -n : kind === "adjust" ? (/^-/.test(String(qty)) ? -n : n) : n;
+  const n = Math.max(1, Math.min(99, Math.abs(Math.round(Number(qty) || 0)))); const neg = kind === "scrap" || kind === "adjust-"; kind = kind.replace(/-$/, ""); const signed = neg ? -n : n;
   saving = true; render();
   try { await db.applyMoves([{ notion_id: v.id, kind, qty: signed, reason: reason || null, ref: "inventory" }]); setErr("inv:" + v.id, ""); toast(`${v.item} ${label(v)}: ${signed > 0 ? "+" : ""}${signed} recorded`); }
   catch (e) { setErr("inv:" + v.id, db.errText(e)); }
@@ -214,7 +214,8 @@ export async function addToCatalog(pre = {}, onDone = null) {
     const size = val("acSize"), c1 = val("acC1"), c2 = q("#acC2wrap").hidden ? "" : val("acC2"); if (!size) return err("Pick or type a size."); if (c2 && !c1) return err("Pick Color 1 first.");
     const colorLabel = [c1, c2].filter(Boolean).join(" + ");
     const coll = isNew ? q("#acColl").value : (p && p.collections && p.collections.length ? collName(p.collections[0]) : "");
-    const base = isNew ? `${coll ? coll + " - " : ""}${name}` : ((store.inv.find((r) => (r.sku || "").startsWith(p.id)) || {}).item || `${coll ? coll + " - " : ""}${name}`).split(" (")[0];
+    // the piece's existing inventory-name prefix, from this product's own variants (as hq.pick_variant does); a sku prefix test would also match cloud-ledge-w-bat for cloud-ledge
+    const base = isNew ? `${coll ? coll + " - " : ""}${name}` : (((opts.variants || []).find((v) => v.product_id === p.id && v.name) || {}).name || `${coll ? coll + " - " : ""}${name}`).split(" (")[0];
     const inventory_name = `${base} (${[size, colorLabel].filter(Boolean).join(", ")})`;
     const dup = store.inv.find((r) => r.item.toLowerCase() === inventory_name.toLowerCase()); if (dup) { m.close(); if (onDone) onDone(dup.id, dup.item); return; }
     const isNewFlags = isNew ? ["product", "size"] : []; if (!isNew && p && !(p.sizes || []).includes(size)) isNewFlags.push("size"); for (const c of [c1, c2]) if (c && !colors.includes(c)) isNewFlags.push("color:" + c);
