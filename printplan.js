@@ -1,7 +1,7 @@
 // Print Plan: assign pieces to printers, commit, run batches, finalize. Line states save to order_lines (set_line_state);
 // the queue layout and settings save to app_state key printplan2/main (set_app_state).
 import * as db from "./supabase.js";
-import { $, esc, plural, isoDay, addDays, NO_DATE, store, onChange, alloc, owed, free, lineKind, lineSpec, isCustom, shipBy, isExpress, rank, sizeLabel, toast, confirmBox, reloadOrder, reloadInventory, cleanText, setErr } from "./orders.js";
+import { $, esc, plural, isoDay, addDays, NO_DATE, store, onChange, load, alloc, owed, free, lineKind, lineSpec, isCustom, shipBy, isExpress, rank, sizeLabel, toast, confirmBox, reloadOrder, reloadInventory, cleanText, setErr } from "./orders.js";
 
 const KEY = "printplan2/main";
 const PRINTERS = [1, 2, 3, 4, 5, 6];
@@ -49,13 +49,13 @@ function rebuildCatalog() {
 }
 
 /* ---------- state ---------- */
-const SHARED = ["seq", "lanes", "pendingStock", "binSync", "binStock", "hoursPerDay", "batchMin", "restockWeeks", "keep", "times", "printers6"];
-function freshShared() { return { v: 3, seq: 0, hoursPerDay: 12, batchMin: 3, restockWeeks: 1, keep: {}, times: {}, lanes: Object.fromEntries(PRINTERS.map((p) => [p, []])), binSync: {}, binStock: {}, pendingStock: {}, printers6: 1 }; }
+const SHARED = ["seq", "lanes", "pendingStock", "hoursPerDay", "batchMin", "restockWeeks", "keep", "times", "printers6"];
+function freshShared() { return { v: 3, seq: 0, hoursPerDay: 12, batchMin: 3, restockWeeks: 1, keep: {}, times: {}, lanes: Object.fromEntries(PRINTERS.map((p) => [p, []])), pendingStock: {}, printers6: 1 }; }
 let state = freshShared(); let VERSION = null; let loaded = false; let loadErr = ""; let planAt = 0; // when this tab last asked the server for its plan copy (and got it)
 let ui = { view: "needs", ahead: 3, sort: null, openGroups: [], openColors: [], stockFormFor: null, startAt: "08:00", picks: {}, q: "", due: "all", hideShelf: false, commitMode: "new", gapAll: false, batchOpen: false, editTimeFor: null };
 try { const u = JSON.parse(localStorage.getItem(UI_KEY) || "null"); if (u) ui = { ...ui, ...u }; } catch (e) {}
 const persistUi = () => { try { localStorage.setItem(UI_KEY, JSON.stringify(ui)); } catch (e) {} };
-function adopt(value) { const s = freshShared(); for (const k of SHARED) if (value && value[k] !== undefined) s[k] = value[k]; PRINTERS.forEach((p) => { s.lanes[p] ||= []; }); s.keep ||= {}; s.times ||= {}; s.binSync ||= {}; s.binStock ||= {}; s.pendingStock ||= {}; return s; }
+function adopt(value) { const s = freshShared(); for (const k of SHARED) if (value && value[k] !== undefined) s[k] = value[k]; PRINTERS.forEach((p) => { s.lanes[p] ||= []; }); s.keep ||= {}; s.times ||= {}; s.pendingStock ||= {}; return s; }
 
 export async function loadPlan(force = false) {
   const asked = Date.now();
@@ -79,11 +79,12 @@ async function flush() {
   try {
     const r = await db.setAppState(KEY, JSON.parse(JSON.stringify({ v: 3, ...shared })), VERSION || 0);
     VERSION = r.version; pending = pending.slice(batch.length); saveErr = "";
+    load(); // the save derived every line's print status server-side; show it
   } catch (e) {
     if (e instanceof db.RpcError && e.stale) {
       try { const rows = await db.readAppState([KEY], {}); const row = rows.find((x) => x.key === KEY); state = row ? adopt(row.value) : freshShared(); VERSION = row ? row.version : 0;
         for (const a of pending) { try { actions[a.name](...a.args); } catch (x) { console.error(x); } }
-        saving = false; saveErr = ""; syncBin(); persist(); render(); return;
+        saving = false; saveErr = ""; persist(); render(); return;
       } catch (x) { saveErr = db.errText(x); }
     } else saveErr = db.errText(e);
     toast("⚠ Print plan not saved: " + saveErr, true);
@@ -253,62 +254,18 @@ function dispatch(name, ...args) {
   if (UNDOABLE.has(name)) { history.push({ label: name, snap: JSON.stringify(state) }); if (history.length > 30) history.shift(); }
   const msg = actions[name](...args);
   pending.push({ name, args: JSON.parse(JSON.stringify(args)) });
-  PRINTERS.forEach(floatPrinting); syncBin(); persist(); persistUi(); render();
+  PRINTERS.forEach(floatPrinting); persist(); persistUi(); render();
   if (msg) toast(msg);
 }
-function undo() { const last = history.pop(); if (!last) return; const told = state.binSync; state = JSON.parse(last.snap); state.binSync = told; pending.push({ name: "restore", args: [last.snap] }); syncBin(); persist(); render(); toast("Undid " + last.label); }
-actions.restore = (snapStr) => { const told = state.binSync; const s = JSON.parse(snapStr); for (const k of SHARED) if (s[k] !== undefined) state[k] = s[k]; state.binSync = told; };
+function undo() { const last = history.pop(); if (!last) return; state = JSON.parse(last.snap); pending.push({ name: "restore", args: [last.snap] }); persist(); render(); toast("Undid " + last.label); }
+actions.restore = (snapStr) => { const s = JSON.parse(snapStr); for (const k of SHARED) if (s[k] !== undefined) state[k] = s[k]; };
 
-/* ---------- Bin View sync: what the plan says each line should be, pushed through set_line_state ---------- */
-const BIN_RANK = { print: 0, "": 0, nostock: 0, printing: 1, printed: 2, done: 3 };
-function binDesired() {
-  const per = {};
-  const bump = (pid, kind) => { const p = PIECE_BY_ID.get(pid); if (!p) return; const r = (per[p.line] ||= { qty: p.qty || 1, printing: 0, printed: 0 }); r[kind]++; };
-  for (const { batch: b } of allBatches()) for (const it of b.items) {
-    if (b.state === B.PRINTING) { if (it.pieceId) bump(it.pieceId, "printing"); }
-    else if (b.state === B.REVIEW) { const d = it.dest || (it.pieceId ? "piece:" + it.pieceId : ""); if (d.startsWith("piece:")) bump(d.slice(6), "printed"); }
-    else if (b.state === B.DONE) { if (it.outcome?.to === "piece") bump(it.outcome.pieceId, "printed"); }
-  }
-  // stock pieces printing (or printed, awaiting finalize) count for the open lines that still need that item — soonest ship date first, then order listing
-  const inBatch = new Set(); for (const { batch: b } of allBatches()) for (const it of b.items) { if (it.pieceId) inBatch.add(it.pieceId); const d = b.state === B.REVIEW ? it.dest || "" : b.state === B.DONE && it.outcome?.to === "piece" ? "piece:" + it.outcome.pieceId : ""; if (d.startsWith("piece:")) inBatch.add(d.slice(6)); }
-  const stock = {}; const stockKey = (sp) => groupKey(sp) + "|" + norm(sizeBucket(sp.size));
-  for (const { batch: b } of allBatches()) for (const it of b.items) { if (it.pieceId) continue; const kind = b.state === B.PRINTING ? "printing" : b.state === B.REVIEW && (it.dest || "stock") === "stock" ? "printed" : ""; if (!kind) continue; const r = (stock[stockKey(it.spec)] ||= { printing: 0, printed: 0 }); r[kind]++; }
-  const fromStock = {};
-  if (Object.keys(stock).length) for (const o of ORDERS) for (const p of o.pieces) {
-    const r = stock[stockKey(p)]; if (!r || !(r.printing + r.printed)) continue; if (inBatch.has(p.id) || p.onShelf) continue;
-    const L = LINE_BY_UID.get(p.line); const ours = state.binStock?.[p.line] && L && L.l.print_src === "plan" && !L.l.packed;
-    if (p.bin !== "print" && !ours) continue;
-    const kind = r.printed ? "printed" : "printing"; r[kind]--; bump(p.id, kind); fromStock[p.line] = 1;
-  }
-  const out = {}; for (const [k, r] of Object.entries(per)) out[k] = r.printed >= r.qty ? "printed" : "printing"; out.__stock = fromStock; return out;
-}
-let syncing = false;
-async function syncBin() {
-  if (!loaded || !store.loadedAt || syncing) return;
-  const want = binDesired(); const had = (state.binSync ||= {}); const push = []; const told = []; const fromStock = want.__stock || {}; delete want.__stock; const stk = (state.binStock ||= {});
-  // The line's real state decides, never the memo of what was told before: if a piece is on a printer and its line still says
-  // needs printing (an older tab pushed it back, or the push failed), it is pushed again on every refresh until it matches.
-  for (const k of new Set([...Object.keys(want), ...Object.keys(had)])) {
-    const d = want[k] || null, s = had[k] || null;
-    const L = LINE_BY_UID.get(k); const cur = L ? (L.l.packed ? "done" : L.l.print_state || "") : null;
-    if (d) { if (cur != null && cur !== d && ((BIN_RANK[cur] ?? 0) < BIN_RANK[d] || (s && cur === s))) push.push({ uid: k, print_state: d, print_src: "plan", oid: L.o.id }); if (d !== s) told.push([k, d]); }
-    else if (s) { if (cur != null && cur === s) push.push({ uid: k, print_state: stk[k] ? "" : "print", print_src: "plan", oid: L.o.id }); told.push([k, null]); } // a stock-covered line goes back to automatic: on the shelf once the batch is finalized
-  }
-  // a Printing the plan set, for a piece no longer on any printer, goes back to needs printing — only when this tab's plan copy was fetched after its orders were,
-  // otherwise a stale copy would undo a batch another tab just queued (the page refreshes orders first, then the plan, so every refresh qualifies)
-  if (planAt >= store.loadedAt.getTime()) for (const [k, L] of LINE_BY_UID) if (L.l.print_state === "printing" && L.l.print_src === "plan" && !want[k] && !had[k] && !push.some((x) => x.uid === k)) push.push({ uid: k, print_state: "print", print_src: "plan", oid: L.o.id });
-  const note = () => { for (const [k, d] of told) { if (d) { had[k] = d; if (fromStock[k]) stk[k] = 1; else delete stk[k]; } else { delete had[k]; delete stk[k]; } } };
-  if (!push.length) { if (told.length) { note(); persist(); } return; }
-  syncing = true;
-  try { await db.setLineState(push.map(({ oid, ...x }) => x)); note(); persist(); setErr("plan", ""); }
-  catch (e) { setErr("plan", "Print Plan couldn't update Bin View: " + db.errText(e)); toast("⚠ " + store.errs.plan, true); }
-  finally { syncing = false; for (const oid of new Set(push.map((x) => x.oid))) await reloadOrder(oid); }
-}
+/* Bin View follows the plan server-side (hq.plan_apply runs inside every plan save); this tab only tidies its own queue. */
 function binCleanup() {
   if (!loaded || !store.loadedAt) return; let changed = false; const notes = [];
   for (const pr of PRINTERS) state.lanes[pr] = state.lanes[pr].filter((b) => {
     if (b.state !== B.QUEUED) return true;
-    const keep = b.items.filter((it) => { if (!it.pieceId) return true; const pc = PIECE_BY_ID.get(it.pieceId); const gone = !pc; const handled = pc && (pc.bin === "printed" || pc.bin === "done") && !state.binSync?.[pc.line]; if (!gone && !handled) return true; changed = true; notes.push(`${it.spec.name}${gone ? " (order done or changed)" : " (marked " + pc.bin + " in Bin View)"}`); return false; });
+    const keep = b.items.filter((it) => { if (!it.pieceId) return true; const pc = PIECE_BY_ID.get(it.pieceId); const gone = !pc; const handled = pc && (pc.bin === "printed" || pc.bin === "done") && LINE_BY_UID.get(pc.line)?.l.print_src !== "plan"; if (!gone && !handled) return true; changed = true; notes.push(`${it.spec.name}${gone ? " (order done or changed)" : " (marked " + pc.bin + " in Bin View)"}`); return false; });
     if (keep.length === b.items.length) return true; b.items = keep; return keep.length > 0;
   });
   if (changed) { pending.push({ name: "noop", args: [] }); persist(); toast("Took pieces off the queue to match Bin View: " + notes.slice(0, 3).join(", ") + (notes.length > 3 ? ` +${notes.length - 3}` : "")); }
@@ -415,7 +372,7 @@ function viewReview(b) {
     return `<div class="rrow ${dest === "fail" ? "rfail" : dest === "stock" ? "rstock" : ""}"><span>${it.pieceId ? "" : stockTag}${pieceLabel(it.spec)}</span><span style="display:flex;gap:6px;flex-wrap:wrap"><select data-act="setDest" data-batch="${b.id}" data-uid="${esc(it.uid)}" aria-label="Where ${esc(it.spec.name)} goes">${opts.map(([v, l]) => `<option value="${esc(v)}" ${v === dest ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>${reprintSel}</span></div>`; }).join("")}</div>`;
 }
 function viewDoneItems(b) { return `<div class="bitems">${b.items.map((it) => { const o = it.outcome || {}; const label = o.to === "piece" ? "→ " + esc(customerOf(o.pieceId) || "order") : o.to === "stock" ? "→ stock" : o.to === "fail" ? (o.reprint ? `failed · reprint on Printer ${o.reprint.printer}` : "failed") : ""; const pick = o.to === "fail" && !o.reprint ? `<select data-act="reprintItem" data-batch="${b.id}" data-uid="${esc(it.uid)}" aria-label="Reprint ${esc(it.spec.name)}">${printerOptions(null, { blank: "Reprint on…" })}</select>` : ""; return `<div class="bi"><span>${pieceLabel(it.spec)}</span><span class="fin fin-${o.to || "none"}">${label}</span>${pick}</div>`; }).join("")}</div>`; }
-function binFlag(b, it) { const pc = it.pieceId && PIECE_BY_ID.get(it.pieceId); if (!pc) return it.pieceId ? ' <span class="binflag">order no longer open</span>' : ""; const mine = state.binSync?.[pc.line]; if (b.state === B.QUEUED && pc.bin === "printing" && !mine) return ' <span class="binflag">printing in Bin View</span>'; if (b.state === B.PRINTING && pc.bin === "print" && mine) return ' <span class="binflag">Bin View says needs printing</span>'; return ""; }
+function binFlag(b, it) { const pc = it.pieceId && PIECE_BY_ID.get(it.pieceId); if (!pc) return it.pieceId ? ' <span class="binflag">order no longer open</span>' : ""; const mine = LINE_BY_UID.get(pc.line)?.l.print_src === "plan"; if (b.state === B.QUEUED && pc.bin === "printing" && !mine) return ' <span class="binflag">printing in Bin View</span>'; if (b.state === B.PRINTING && pc.bin === "print" && mine) return ' <span class="binflag">Bin View says needs printing</span>'; return ""; }
 function viewLiveItems(b) { return `<div class="bitems">${b.items.length ? "" : '<span class="sub">Empty. Add stock pieces below.</span>'}${b.items.map((it) => `<div class="bi"><span>${it.pieceId ? "" : stockTag}${pieceLabel(it.spec)}${it.pieceId ? ` <span class="sub">· ${esc(customerOf(it.pieceId))}</span>` : ""}${binFlag(b, it)}</span><span><button type="button" data-act="dupItem" data-batch="${b.id}" data-uid="${esc(it.uid)}" title="Duplicate${it.pieceId ? " (the extra copy goes to stock)" : ""}" aria-label="Duplicate ${esc(it.spec.name)}">⧉</button><button type="button" data-act="removeItem" data-batch="${b.id}" data-uid="${esc(it.uid)}" title="${it.pieceId ? "Send back to Needs printing" : "Remove"}" aria-label="Remove ${esc(it.spec.name)}">✕</button></span></div>`).join("")}</div>`; }
 function viewBatch(printer, slot, count) {
   const { batch: b, index, hours, start, end } = slot; const live = LIVE.has(b.state);
@@ -489,7 +446,7 @@ function render() {
   const bar = viewCommitBar(covered); q("#commitBar").hidden = !(view === "needs" || view === "byitem" || view === "bycolor"); setHTML(q("#pcounts"), bar.counts); q("#commitBtn").classList.toggle("dim", !bar.n); q("#commitBtn").textContent = bar.n ? `Commit ${plural(bar.n, "piece")} to queues` : "Commit to queues";
   q("#dlItems").innerHTML = CATALOG_ITEMS.map((n) => `<option value="${esc(n)}">`).join(""); q("#dlColors").innerHTML = CATALOG_COLORS.map((n) => `<option value="${esc(n)}">`).join("");
 }
-function refresh() { if (!host) return; rebuildCatalog(); SALES = sold7(); if (loaded) { binCleanup(); syncBin(); } bgRender(); }
+function refresh() { if (!host) return; rebuildCatalog(); SALES = sold7(); if (loaded) binCleanup(); bgRender(); }
 
 /* ---------- events ---------- */
 const uiSet = (fn) => { fn(); persistUi(); render(); };
@@ -502,7 +459,7 @@ const CLICK = {
   commitGo: () => { const picks = livePicks(); if (!picks.length) { toast("Pick a printer for at least one piece first"); return; } dispatch("commitPicks", picks); ui.picks = {}; ui.view = "queues"; persistUi(); render(); },
   clearPicks: () => uiSet(() => { ui.picks = {}; }),
   undo: () => undo(),
-  unprint: async (d, el) => { el.disabled = true; const L = LINE_BY_UID.get(d.line); try { await db.setLineState([{ uid: d.line, print_state: "print", print_src: "plan" }]); } catch (e) { toast("⚠ " + db.errText(e), true); } if (L) await reloadOrder(L.o.id); },
+  unprint: async (d, el) => { el.disabled = true; const L = LINE_BY_UID.get(d.line); try { await db.setLineState([{ uid: d.line, print_state: "print", print_src: "bin" }]); } catch (e) { toast("⚠ " + db.errText(e), true); } if (L) await reloadOrder(L.o.id); },
   addPiece: (d, el) => { const s = el.closest(".sform")?.querySelector("[data-act=addPieceSel]"); if (!s || !s.value) { toast("Choose a piece first"); return; } dispatch("addPiece", d.batch, s.value); },
   dupItem: (d) => dispatch("dupItem", d.batch, d.uid),
   addToInventory: (d) => addToInventory(d.key),

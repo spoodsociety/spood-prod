@@ -87,6 +87,7 @@ export const platColor = (p) => NPLAT[p] || (/tiktok/i.test(p) ? "pink" : /etsy/
 export const isEncText = (t) => /complete enclosure|^\W*(?:\d+\s+|two\s+|three\s+)?enclosures?\b/i.test(cleanText(t)) && !/floor|insert|climb|hide|ledge|background|wrap|magnetic/i.test(t);
 const NOT_PRINTED = /starter\s*kit|c[ao]+c+o+n|\bplants?\b|substrate|moss|mystery|magnetic background|figurine|add[- ]?on\b(?!.*\b(hide|ledge|climb|floor|insert|cauldron|bowl|feeder)\b)/i;
 export function lineKind(l) {
+  if (l.kind === "enc" || l.kind === "stock" || l.kind === "print") return l.kind; // the server decides (hq.line_kind); the text rules below are the fallback
   const t = cleanText(l.text);
   if (encVar(l) || isEncText(t)) return "enc";
   if (l.match === "untracked") return "stock";
@@ -122,23 +123,15 @@ export function lineSpec(l) {
   return { name, size: sz ? (sz.toLowerCase().startsWith("sling") ? "Sling Size" : sz[0].toUpperCase() + sz.slice(1).toLowerCase()) : (isCustom(t) ? "Custom" : ""), color, inv: null, custom: isCustom(t) };
 }
 
-/* Shelf allocation: what the shelf covers, in ship-date order. Stock numbers come from the server; this only hands them out. */
+/* Shelf allocation comes from the server (hq.shelf_alloc, inside read_orders / inventory_rows): every tab sees the same answer and
+   Mark Done takes stock by the same rule. The browser only reads it. */
 export const alloc = new Map(); // uid -> qty from shelf
 export const owed = new Map();  // inv id -> pieces open orders need from it
 export function recompute() {
   store.open = store.orders.filter((o) => o.status !== "Done").sort(rank);
   alloc.clear(); owed.clear();
-  const left = new Map(); for (const r of store.inv) if (r.in_stock != null) left.set(r.id, Math.max(0, Number(r.in_stock) || 0));
-  for (const o of store.open) for (const l of o.lines || []) {
-    const r = invRowOf(l); if (!r || r.in_stock == null) continue;
-    const kind = lineKind(l);
-    if (kind === "print" && (l.print_state || "") !== "" ) continue;          // printed / printing / needs printing: never from the shelf
-    if (kind === "print" && l.packed && l.packed_from === "print") continue;  // packed a fresh print
-    if (kind === "print" && isCustom(l.text)) continue;
-    owed.set(r.id, (owed.get(r.id) || 0) + (Number(l.qty) || 1));
-    const have = left.get(r.id) || 0; const take = Math.min(have, Number(l.qty) || 1);
-    if (take > 0) { alloc.set(l.uid, take); left.set(r.id, have - take); }
-  }
+  for (const o of store.open) for (const l of o.lines || []) if (Number(l.alloc) > 0) alloc.set(l.uid, Number(l.alloc));
+  for (const r of store.inv) if (Number(r.owed) > 0) owed.set(r.id, Number(r.owed));
 }
 export const free = (invId) => { const r = store.invById.get(invId); return r && r.in_stock != null ? Math.max(0, (Number(r.in_stock) || 0) - (owed.get(invId) || 0)) : null; };
 
