@@ -37,16 +37,21 @@ export function confirmBox({ title, body, ok = "OK", danger = false }) {
 }
 
 /* ===================== store ===================== */
-export const store = { orders: [], open: [], inv: [], invById: new Map(), loadedAt: null, err: "", errs: {}, listeners: new Set(), busy: new Set() };
+export const store = { orders: [], open: [], inv: [], invById: new Map(), loadedAt: null, doneAt: null, err: "", errs: {}, listeners: new Set(), busy: new Set() };
 export const onChange = (fn) => { store.listeners.add(fn); return () => store.listeners.delete(fn); };
 export function emit() { for (const fn of store.listeners) { try { fn(); } catch (e) { console.error(e); } } }
 export const setErr = (key, msg) => { if (msg) store.errs[key] = msg; else delete store.errs[key]; };
 
-export async function load() {
+// Open orders are small and change all day: every refresh reads them. Done orders are the bulk (hundreds, growing) and only change
+// through this app, so they are read once in the background, then only on demand (Done list, Refresh); marking Done / Undo updates one order.
+export async function load({ done = false } = {}) {
   try {
-    const [orders, inv, opts] = await Promise.all([db.readOrders("all"), db.inventoryRows(), cat.opts && !cat.stale ? null : db.catalogOptions()]);
+    const [open, doneRows, inv, opts] = await Promise.all([db.readOrders("open"), done ? db.readOrders("done") : null, db.inventoryRows(), cat.opts && !cat.stale ? null : db.catalogOptions()]);
     if (opts) indexCatalog(opts);
-    store.orders = Array.isArray(orders) ? orders : [];
+    const openList = Array.isArray(open) ? open : []; const openIds = new Set(openList.map((o) => o.id));
+    const doneList = (Array.isArray(doneRows) ? doneRows : store.orders.filter((o) => o.status === "Done")).filter((o) => !openIds.has(o.id));
+    if (Array.isArray(doneRows)) store.doneAt = new Date();
+    store.orders = [...openList, ...doneList];
     store.inv = Array.isArray(inv) ? inv : [];
     store.invById = new Map(store.inv.map((r) => [r.id, r]));
     store.loadedAt = new Date(); store.err = "";
@@ -178,8 +183,11 @@ export async function setStatus(o, status) {
     const what = mv.length ? `<br><br>Comes off the shelf: ${mv.map((m) => `${m.qty} × ${esc((store.invById.get(m.notion_id) || {}).item || m.notion_id)}`).join(", ")}.` : "<br><br>Nothing comes off the shelf (every piece was printed fresh).";
     const ok = await confirmBox({ title: "Mark order Done?", body: `${esc(o.customer)} will be marked <b>Done</b> (shipped) and leave the board.${what}`, ok: "Yes, mark Done" });
     if (!ok) { emit(); return false; }
-    const done = await act(key, async () => { const r = await db.saveWithRetry(o.id, (p) => ({ ...p, status: "Done" }), { done: true, moves: mv }); recentDone.unshift({ id: o.id, customer: o.customer, prev: obPick(o.status), at: Date.now(), epoch: r && r.epoch }); }, { reload: o.id });
-    if (done) toast(`${o.customer} → Done${mv.length ? ". Took " + plural(mv.reduce((a, m) => a + m.qty, 0), "piece") + " off the shelf" : ""}`);
+    let short = [];
+    const done = await act(key, async () => { const r = await db.saveWithRetry(o.id, (p) => ({ ...p, status: "Done" }), { done: true, moves: mv }); short = (r && Array.isArray(r.short)) ? r.short : []; recentDone.unshift({ id: o.id, customer: o.customer, prev: obPick(o.status), at: Date.now(), epoch: r && r.epoch }); }, { reload: o.id });
+    // the server takes only what the shelf has (a count never goes below zero); anything it couldn't take is a count that was already wrong
+    if (done && short.length) toast(`${o.customer} → Done. Shelf was already short, not taken: ${short.map((s) => `${s.wanted - s.taken} × ${s.item}`).join(", ")}. Recount those.`, true);
+    else if (done) toast(`${o.customer} → Done${mv.length ? ". Took " + plural(mv.reduce((a, m) => a + m.qty, 0), "piece") + " off the shelf" : ""}`);
     await reloadInventory();
     return done;
   }
@@ -331,7 +339,7 @@ export function binRender() {
   document.querySelectorAll("[data-binmode]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.binmode === BIN.mode)));
   const done = BIN.mode === "done";
   for (const el of [$("#binDays"), $("#binLay"), $('[data-fold="bininvhow"]')]) if (el) el.hidden = done;
-  if (done && st && !store.err && store.loadedAt) st.textContent = `${plural(store.orders.length - store.open.length, "done order")} · synced ${store.loadedAt.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
+  if (done && st && !store.err && store.loadedAt) st.textContent = store.doneAt ? `${plural(store.orders.length - store.open.length, "done order")} · synced ${store.doneAt.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}` : "Reading done orders…";
   if (!store.loadedAt) return;
   if (done) { doneRender(box); return; }
   const today = isoDay(); const dk = (o) => (shipBy(o) < today ? "overdue" : shipBy(o));
@@ -386,7 +394,7 @@ function binScrollbar(bar, board) {
 function binWire() {
   const box = $("#binList");
   $("#binSearch").oninput = () => { BIN.doneLimit = 40; binRender(); }; $("#binPlat").onchange = () => { BIN.doneLimit = 40; binRender(); };
-  document.addEventListener("click", (e) => { const b = e.target.closest("[data-binmode]"); if (!b || BIN.mode === b.dataset.binmode) return; BIN.mode = b.dataset.binmode; BIN.doneLimit = 40; BIN.open = null; BIN.stOpen = null; binRender(); });
+  document.addEventListener("click", (e) => { const b = e.target.closest("[data-binmode]"); if (!b || BIN.mode === b.dataset.binmode) return; BIN.mode = b.dataset.binmode; BIN.doneLimit = 40; BIN.open = null; BIN.stOpen = null; binRender(); if (BIN.mode === "done") load({ done: true }); });
   $("#binDays").addEventListener("click", (e) => { const b = e.target.closest("[data-day]"); if (!b) return; const k = b.dataset.day; if (k === "all") BIN.days = []; else BIN.days = BIN.days.includes(k) ? BIN.days.filter((x) => x !== k) : [...BIN.days, k]; binRender(); });
   document.addEventListener("click", (e) => { const b = e.target.closest("[data-binlay]"); if (!b) return; BIN.layout = b.dataset.binlay; try { localStorage.setItem("spood.bin.layout", BIN.layout); } catch (x) {} binRender(); });
   document.addEventListener("click", (e) => { if ((BIN.open || BIN.stOpen) && !e.target.closest(".nmenu,[data-binopen],[data-stopen]")) { BIN.open = null; BIN.stOpen = null; binRender(); } });
@@ -818,7 +826,9 @@ async function saveForm() {
       if (linesChanged) { out.lines = lines; out.collections = collections; out.notes = lines.map((l) => l.text).join("\n"); out.freebie = lines.filter((l) => l.tag === "gift").map((l) => l.text); }
       return out;
     });
-    F.busy = false; toast(`Saved ${f.customer.trim()}${r && r.unmatched ? ` · ${plural(r.unmatched, "line")} not in the catalog` : ""}`); closeForm(); await reloadOrder(f.id); if (cat.stale) await loadCatalog();
+    F.busy = false;
+    if (r && Array.isArray(r.duplicates) && r.duplicates.length) toast(`Saved. Order #${f.order_number} is also on: ${r.duplicates.map((d) => d.customer).join(", ")}`, true); else toast(`Saved ${f.customer.trim()}${r && r.unmatched ? ` · ${plural(r.unmatched, "line")} not in the catalog` : ""}`);
+    closeForm(); await reloadOrder(f.id); if (cat.stale) await loadCatalog();
   } catch (e) { F.busy = false; F.errors = [db.errText(e)]; formRender(); }
 }
 
