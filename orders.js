@@ -844,8 +844,8 @@ async function linesForSave(ff, make = true) {
       let st = pickState(l);
       if (st.status === "creatable" && make) { const r = await db.pickVariant({ product_id: l.product_id, size_code: st.size, color_1: l.c1 || null, color_2: l.c2 || null, option_code: l.option_code || "standard", make: true }); if (r && r.status === "variant") { st = { status: "variant", name: r.name, v: { id: r.variant_id } }; invalidateCatalog(); } else throw new Error(`${(cat.byProduct.get(l.product_id) || {}).name || l.product_id}: ${pickWord({ status: "unresolved", ...(r || {}) }) || (r && r.error) || "couldn't be added to the catalog"}`); }
       if (st.status === "variant") { o.text = st.name; o.variant_id = st.v.id; }
-      const cz = l.size_code === "custom"; o.size_1 = cz && l.size_1 !== "" ? Number(l.size_1) : null; o.size_2 = cz && l.size_2 !== "" ? Number(l.size_2) : null; o.size_3 = cz && l.size_3 !== "" ? Number(l.size_3) : null; o.size_unit = cz ? l.size_unit || "in" : "in"; o.size_basis = cz ? l.size_basis || "piece" : "piece";
       else { const p = cat.byProduct.get(l.product_id) || { name: l.product_id }; const parts = [l.size_code && l.size_code !== "standard" ? sizeName(p, l.size_code) : "", [colorName(l.c1), colorName(l.c2)].filter(Boolean).join(" + ")].filter(Boolean); o.text = p.name + (parts.length ? ` (${parts.join(", ")})` : ""); }
+      const cz = l.size_code === "custom"; o.size_1 = cz && l.size_1 !== "" ? Number(l.size_1) : null; o.size_2 = cz && l.size_2 !== "" ? Number(l.size_2) : null; o.size_3 = cz && l.size_3 !== "" ? Number(l.size_3) : null; o.size_unit = cz ? l.size_unit || "in" : "in"; o.size_basis = cz ? l.size_basis || "piece" : "piece";
     } else { o.text = String(l.text).trim(); if (l.inv) o.notion_inventory_id = l.inv; if (l.untracked && !l.inv) o.untracked = true; }
     out.push(o);
   }
