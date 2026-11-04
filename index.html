@@ -194,6 +194,7 @@ button.ntext{background:none;border:0;padding:0;margin:0;font:inherit;text-align
 .bvtag{display:inline-block;margin-right:5px;padding:0 5px;border-radius:4px;font:600 .68rem/1.5 var(--body);letter-spacing:0;background:var(--n-purple-bg);color:var(--st-enc);vertical-align:1px;white-space:nowrap}
 .nline .bvsub{justify-self:start;font:500 .75rem/1.3 var(--body);color:var(--muted)}
 .nline .bvdims{color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums}
+.nline .bvmiss{color:var(--st-print);font-weight:600}
 .nline .lerr{grid-column:1/-1}
 .bvicon,.bvtype{display:inline-block;vertical-align:-1px;margin-left:3px;line-height:0;position:relative}
 .bvtype svg{width:15px;height:15px}.bvglue{white-space:nowrap}
@@ -275,6 +276,7 @@ button.ntext{background:none;border:0;padding:0;margin:0;font:inherit;text-align
 .od .line.t-addon{background:color-mix(in srgb,var(--accent-soft) 55%,var(--surface))}
 .od .line .nm small{color:var(--muted);font-size:.78rem;font-weight:600}
 .od .line input,.od .line select{height:44px;padding:6px 12px;border-radius:12px;width:100%;font-size:.95rem}
+.od .line .szrow{grid-column:1/-1;display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:.85rem;color:var(--muted)}.od .line .szrow input{width:72px;height:38px;padding:4px 8px}.od .line .szrow select{width:auto;height:38px;padding:4px 8px}.od .line .szrow .szl{font-weight:700;color:var(--st-out)}
 .od .line .li-note{font-size:.9rem}
 .od .line .x{border:0;background:none;color:var(--muted);font-size:1.2rem;cursor:pointer;min-height:44px}
 .od .line .x:hover{color:var(--bad)}
@@ -356,6 +358,7 @@ label.allto{display:flex;flex-direction:row;gap:6px;align-items:center;font-size
 #pqHost .shelfnote{color:var(--good);font-weight:600}
 #pqHost .dup{display:inline-block}
 #pqHost .dup.instock{color:var(--good)}
+#pqHost .dup.miss{color:var(--st-print);font-weight:600}
 #pqHost .gapnote{color:var(--bad);font-weight:600}
 #pqHost .shelfall{font-size:.85rem;color:var(--good);font-weight:600}
 #pqHost .commit{position:sticky;bottom:calc(10px + env(safe-area-inset-bottom,0px));z-index:5;background:var(--surface);border-radius:24px;padding:10px 12px 10px 20px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;box-shadow:var(--bub),0 18px 36px var(--drop)}
@@ -597,7 +600,7 @@ label.allto{display:flex;flex-direction:row;gap:6px;align-items:center;font-size
 <div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
 <div id="modalHost"></div>
 
-<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611032042","./orders.js":"./orders.js?v=2611032042","./printplan.js":"./printplan.js?v=2611032042","./inventory.js":"./inventory.js?v=2611032042"}}</script>
+<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611032050","./orders.js":"./orders.js?v=2611032050","./printplan.js":"./printplan.js?v=2611032050","./inventory.js":"./inventory.js?v=2611032050"}}</script>
 <script type="module">
 import * as db from "./supabase.js";
 import * as orders from "./orders.js";

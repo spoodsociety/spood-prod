@@ -94,10 +94,10 @@ export function lineKind(l) {
   if (NOT_PRINTED.test(t) && !/\b(hide|ledge|climb|floor|insert|cauldron|bowl|feeder)\b/i.test(t.replace(/starter\s*kit/i, ""))) return "stock";
   return "print";
 }
-// the measurements a custom piece is made to, as written on the order: "5.9” W x 9.84” H", "Fits 4.7 x 4.7", "3 3/4”"
-const NUM = String.raw`\d+(?:[.,]\d+)?(?:[\s-]+\d+\/\d+)?(?:\s*(?:[”"″']|cm|mm|in(?:ch(?:es)?)?\b))?(?:\s*[WHLD]\b)?`;
-const DIMS = new RegExp(String.raw`(?:(?:fits|measurements?|enclosure size|size)\s*:?\s*)?(?:${NUM}\s*[x×X]\s*${NUM}(?:\s*[x×X]\s*${NUM})?|\d+(?:[.,]\d+)?(?:[\s-]+\d+\/\d+)?\s*(?:[”"″]|cm|mm|in(?:ch(?:es)?)?\b))(?:\s*(?:enclosure(?:\s*size)?|\(enclosure\)))?`, "i");
-export const measureOf = (text, note) => { if (DIMS.test(String(note || ""))) return String(note).replace(/\s+/g, " ").trim(); const m = String(text || "").match(DIMS); return m ? m[0].replace(/\s+/g, " ").trim() : ""; };
+// a custom-size line's measurements, as entered: "5.9 × 9.84 in", "fits 4.7 × 4.7 in"
+const numStr = (n) => String(Number(n)).replace(/\.0+$/, "");
+export const fmtSize = (l) => { const ns = [l.size_1, l.size_2, l.size_3].filter((n) => n != null && n !== "").map(numStr); return ns.length ? `${l.size_basis === "enclosure" ? "fits " : ""}${ns.join(" × ")} ${l.size_unit || "in"}` : ""; };
+export const SIZE_FIELDS = ["size_1", "size_2", "size_3", "size_unit", "size_basis"];
 export const isCustom = (t) => /custom|\d+(\.\d+)?\s*(cm|mm|in\b|inch|"|”|″)|\d\s*[x×]\s*\d/i.test(String(t || ""));
 export const invRowOf = (l) => (l.notion_inventory_id ? store.invById.get(l.notion_inventory_id) : null) || null;
 // the enclosure variant a line is linked to, from its catalog sku: enclosure-small, enclosure-large, enclosure-small-magnetic
@@ -295,8 +295,9 @@ function lineHtml(o, l, cardTag = "") {
   const icon = marks + stIcon;
   const sub = e.st === "out" ? `<span class="bvsub">${(r && Number(r.in_stock) > 0 ? "Reserved for earlier orders" : "Out of stock")}${e.a ? ` · ${e.a} of ${qty} on the shelf` : ""}</span>` : e.part ? `<span class="bvsub">${e.a} of ${qty} on the shelf · print ${qty - e.a}</span>` : (l.match === "unmatched" && !head ? `<button type="button" class="ninvfind" data-oeline="${key}" data-oid="${o.id}">Not in catalog</button>` : "");
   const noteHtml = l.note ? `<span class="bvsub bvnote">${esc(l.note)}</span>` : "";
-  const dims = !head && (r ? /\(custom\b/i.test(r.item) : isCustom(l.text)) ? measureOf(l.text, l.note) : "";
-  const dimsHtml = dims && !(l.note && l.note.includes(dims)) ? `<span class="bvsub bvdims">${esc(dims)}</span>` : "";
+  const cv = l.variant_id != null ? cat.varById.get(String(l.variant_id)) : null; const customLine = !head && (cv ? cv.size_code === "custom" : !r && isCustom(l.text));
+  const dims = customLine ? fmtSize(l) : "";
+  const dimsHtml = dims ? `<span class="bvsub bvdims">${esc(dims)}</span>` : customLine ? `<span class="bvsub bvmiss">Custom size missing</span>` : "";
   const tip = `${e.st === "packed" ? "Packed" : LAB[e.st] || ""}${l.state_by ? " · " + l.state_by : ""}\nOrder says: ${cleanText(l.text)}`;
   const box = head ? `<input type="checkbox" class="npack" data-pack="${key}" data-oid="${o.id}" data-from="${pull ? "shelf" : "print"}" ${l.packed ? "checked" : ""} ${packable && !busy ? "" : "disabled"} aria-label="Packed: ${esc(cleanText(l.text))}">`
     : `<span class="bvbox" data-tip="${l.packed ? "Packed" : packable ? "Mark packed" : "Can't pack yet"}"><input type="checkbox" class="npack" data-pack="${key}" data-oid="${o.id}" data-from="${pull ? "shelf" : "print"}" ${l.packed ? "checked" : ""} ${packable && !busy ? "" : "disabled"} aria-label="Packed: ${esc(cleanText(l.text))}"></span>`;
@@ -561,7 +562,7 @@ const pickWord = (st) => {
 // a saved order line -> form line (pick when the catalog knows the item, else text)
 function lineFromSaved(l) {
   const v = (l.notion_inventory_id && cat.varByNotion.get(l.notion_inventory_id)) || (l.variant_id != null && cat.varById.get(String(l.variant_id))) || null;
-  const base = { uid: l.uid, qty: Number(l.qty) || 1, note: l.note || "", tag: l.tag || "", group_uid: l.group_uid || null, print_state: l.print_state, packed: l.packed };
+  const base = { uid: l.uid, qty: Number(l.qty) || 1, note: l.note || "", tag: l.tag || "", group_uid: l.group_uid || null, print_state: l.print_state, packed: l.packed, size_1: l.size_1 ?? "", size_2: l.size_2 ?? "", size_3: l.size_3 ?? "", size_unit: l.size_unit || "in", size_basis: l.size_basis || "piece" };
   if (v) { const c = schemeColors(v.color_scheme_id); return { ...base, kind: "pick", product_id: v.product_id, size_code: v.size_code, c1: c.c1, c2: c.c2, option_code: v.option_code || "standard", untracked: false }; }
   return { ...base, kind: "text", text: cleanText(l.text), inv: l.notion_inventory_id || "", untracked: l.match === "untracked" };
 }
@@ -604,9 +605,15 @@ function searchProducts(q) { const qt = toks(q); if (!qt.length) return []; cons
 const stockOf = (st) => { const v = st && st.v; const r = v && v.notion_id ? store.invById.get(v.notion_id) : null; return r ? (r.in_stock != null ? `${r.in_stock} on shelf` : "not tracked") : ""; };
 
 const tagBtns = (i, l) => `<span class="tags"><button type="button" class="tagbtn" data-tag="gift" data-l="${i}" aria-pressed="${l.tag === "gift"}" title="Gift">🎁 Gift</button><button type="button" class="tagbtn" data-tag="addon" data-l="${i}" aria-pressed="${l.tag === "addon"}" title="Add-on">+ Add-on</button></span>`;
+// measurements for a custom-size pick: as entered, in the order the customer gave them
+function sizeRow(l, i, p) {
+  const ph = /floor|insert/i.test((p && p.category) || "") ? ["W", "L", ""] : ["W", "H", "D"];
+  const num = (k, j) => `<input type="number" inputmode="decimal" step="0.01" min="0" data-l="${i}" data-lf="${k}" value="${esc(l[k] ?? "")}" placeholder="${ph[j]}" aria-label="Size ${j + 1}">`;
+  return `<div class="szrow"><span class="szl">Custom</span>${num("size_1", 0)}<span>×</span>${num("size_2", 1)}<span>×</span>${num("size_3", 2)}<select data-l="${i}" data-lf="size_unit" aria-label="Unit"><option value="in" ${l.size_unit !== "cm" ? "selected" : ""}>in</option><option value="cm" ${l.size_unit === "cm" ? "selected" : ""}>cm</option></select><select data-l="${i}" data-lf="size_basis" aria-label="What the size is"><option value="piece" ${l.size_basis !== "enclosure" ? "selected" : ""}>piece size</option><option value="enclosure" ${l.size_basis === "enclosure" ? "selected" : ""}>fits enclosure</option></select></div>`;
+}
 function lineRowHtml(l, i) {
   const q = Number(l.qty) || 1; const state = l.print_state ? ` · <b>${esc(LAB[l.print_state] || l.print_state)}</b>` : ""; const packed = l.packed ? " · packed" : "";
-  const noteIn = `<input class="li-note" data-l="${i}" data-lf="note" value="${esc(l.note || "")}" autocomplete="off" aria-label="Note for item ${i + 1}" placeholder="${l.kind === "pick" && l.size_code === "custom" ? "W × L in" : "Notes"}">`;
+  const noteIn = `<input class="li-note" data-l="${i}" data-lf="note" value="${esc(l.note || "")}" autocomplete="off" aria-label="Note for item ${i + 1}" placeholder="Notes">`;
   const del = `<button type="button" class="x" data-del="${i}" aria-label="Remove item ${i + 1}">✕</button>`;
   if (l.kind === "pick") {
     const p = cat.byProduct.get(l.product_id); const st = pickState(l); const pc = p ? productColors(p) : { any: false, s1: [], s2: [] };
@@ -619,7 +626,7 @@ function lineRowHtml(l, i) {
     const small = [p && p.collections && p.collections.length ? esc((cat.colls.get(p.collections[0]) || {}).name || "") : "", esc(stockOf(st)), l.option_code && l.option_code !== "standard" ? esc(l.option_code) : "", l.src ? esc({ collection: "from collection", addon: "add-on", repeat: "from a past order", paste: "pasted" }[l.src] || "") : ""].filter(Boolean).join(" · ");
     return `<div class="line pick${l.tag ? " t-" + l.tag : ""}" data-k="${i}" ${l.uid ? `data-uid="${l.uid}"` : ""}><div class="nm"><span class="pname"><span class="ta"><input class="li-prod" data-pl="${i}" value="${esc(p ? p.name : l.product_id)}" data-was="${esc(p ? p.name : l.product_id)}" autocomplete="off" aria-label="Item ${i + 1}"><span class="ta-list" hidden></span></span>${tagBtns(i, l)}</span><small>${small}${state}${packed}</small>${word ? `<span class="flag${ok ? " ok" : ""}">${esc(word)}</span>${st.reason === "color not offered" ? `<button type="button" class="btn ghost mini" data-addcat="${i}">Add to catalog</button>` : ""}` : ""}</div>
       <input type="number" min="1" max="99" value="${q}" data-l="${i}" data-lf="qty" aria-label="Quantity">
-      <div class="szc">${sizeSel}</div><div class="clc">${colorSel}</div><div class="ntc">${noteIn}</div>${del}</div>`;
+      <div class="szc">${sizeSel}</div><div class="clc">${colorSel}</div><div class="ntc">${noteIn}</div>${del}${l.size_code === "custom" ? sizeRow(l, i, p) : ""}</div>`;
   }
   const x = RES.get((l.text || "").trim());
   const flag = l.untracked ? `<span class="flag ok">Not tracked</span>` : isEncText(l.text) ? `<span class="flag ok">Enclosure heading</span>` : `<span class="flag${x && ["variant", "creatable", "untracked"].includes(x.status) ? " ok" : ""}">${esc(resolveWord(x))}</span>${x && x.status !== "variant" ? `<button type="button" class="btn ghost mini" data-addcat="${i}">Add to catalog</button>` : ""}`;
@@ -729,10 +736,11 @@ function pasteHtml() {
 }
 // a resolve_lines verdict -> form line
 function lineFromResolved(text, qty, x) {
-  if (x && x.status === "variant" && cat.varById.get(String(x.variant_id))) { const v = cat.varById.get(String(x.variant_id)); const c = schemeColors(v.color_scheme_id); return { kind: "pick", product_id: v.product_id, size_code: v.size_code, c1: c.c1, c2: c.c2, option_code: v.option_code || "standard", qty, note: "", untracked: false, src: "paste" }; }
+  const dims = x && x.dims ? { size_1: x.dims.size_1 ?? "", size_2: x.dims.size_2 ?? "", size_3: x.dims.size_3 ?? "", size_unit: x.dims.size_unit || "in", size_basis: x.dims.size_basis || "piece" } : {};
+  if (x && x.status === "variant" && cat.varById.get(String(x.variant_id))) { const v = cat.varById.get(String(x.variant_id)); const c = schemeColors(v.color_scheme_id); return { kind: "pick", product_id: v.product_id, size_code: v.size_code, c1: c.c1, c2: c.c2, option_code: v.option_code || "standard", qty, note: "", untracked: false, src: "paste", ...dims }; }
   if (x && x.product_id && cat.byProduct.get(x.product_id)) { const a = x.add || {}; const byName = (nm) => { const k = normName(nm); const c = nm && [...cat.colors.values()].find((c) => normName(c.name) === k || (c.aliases || []).some((al) => normName(al) === k)); return c ? c.id : ""; };
     const c = x.color_scheme_id && cat.schemes.get(x.color_scheme_id) ? schemeColors(x.color_scheme_id) : { c1: byName(a.color_1), c2: byName(a.color_2) };
-    return { ...pickLine(x.product_id, { size_code: x.size_code }), c1: c.c1, c2: c.c2, qty, src: "paste" }; }
+    return { ...pickLine(x.product_id, { size_code: x.size_code }), c1: c.c1, c2: c.c2, qty, src: "paste", ...dims }; }
   return { kind: "text", text, qty, note: "", untracked: !!(x && x.status === "untracked") || (/\bplants?\b|cocoon|substrate|moss/i.test(text) && !(x && x.status === "variant")), src: "paste" };
 }
 async function reviewPaste(text) {
@@ -793,7 +801,7 @@ function wireForm(host, custs) {
     if (t.matches("[data-f='collection']")) { const prev = f.collection; read(); const next = f.collection; f.collection = prev;
       if (next && f.lines.some((l) => l.src !== "collection" && l.src !== "enclosure") && !(await confirmBox({ title: "Replace the items?", body: "The collection's pieces replace what's listed now.", ok: "Replace" }))) { formRender(); return; }
       f.collection = next; f.choices = {}; if (!next) f.lines = f.lines.filter((l) => l.src !== "collection"); else { f.lines = f.lines.filter((l) => l.src === "collection" || l.src === "enclosure"); try { await applyCollection(f); } catch (x) { f.collection = prev; toast(db.errText(x), true); } } formRender(); return; }
-    if (t.matches("[data-f],[data-l]")) { read(); if (t.dataset.lf && t.dataset.lf !== "qty" && t.dataset.lf !== "note") formRender(); } if (t.matches("[data-r]")) { const l = F.review.lines[+t.dataset.r]; const k = t.dataset.rf; if (k === "qty") l.line.qty = Math.max(1, +t.value || 1); } };
+    if (t.matches("[data-f],[data-l]")) { read(); if (t.dataset.lf && !["qty", "note", "size_1", "size_2", "size_3"].includes(t.dataset.lf)) formRender(); } if (t.matches("[data-r]")) { const l = F.review.lines[+t.dataset.r]; const k = t.dataset.rf; if (k === "qty") l.line.qty = Math.max(1, +t.value || 1); } };
   host.ontoggle = (e) => { if (e.target.matches("[data-custfold]")) F.custOpen = e.target.open; };
   host.onclick = async (e) => {
     const t = e.target; let b;
@@ -821,7 +829,7 @@ function wireForm(host, custs) {
 }
 function validate(f) {
   const errs = []; if (!f.customer.trim()) errs.push("Add the customer's name"); if (!f.platform.length) errs.push("Pick the platform the order came from"); if (!f.ship_by) errs.push("Pick a ship-by date"); if (!f.lines.length) errs.push("Add at least one item");
-  f.lines.forEach((l, i) => { if (l.kind === "text" && !String(l.text).trim()) errs.push(`Line ${i + 1} has no text`); });
+  f.lines.forEach((l, i) => { if (l.kind === "text" && !String(l.text).trim()) errs.push(`Line ${i + 1} has no text`); if (l.kind === "pick" && l.size_code === "custom" && !(Number(l.size_1) > 0)) errs.push(`Line ${i + 1}: custom size needs its measurements`); });
   return errs;
 }
 // form lines -> save_order lines. Catalog picks carry a variant id; a pick the catalog doesn't have yet is made first (hq.pick_variant make).
@@ -833,6 +841,7 @@ async function linesForSave(ff, make = true) {
       let st = pickState(l);
       if (st.status === "creatable" && make) { const r = await db.pickVariant({ product_id: l.product_id, size_code: st.size, color_1: l.c1 || null, color_2: l.c2 || null, option_code: l.option_code || "standard", make: true }); if (r && r.status === "variant") { st = { status: "variant", name: r.name, v: { id: r.variant_id } }; invalidateCatalog(); } else throw new Error(`${(cat.byProduct.get(l.product_id) || {}).name || l.product_id}: ${pickWord({ status: "unresolved", ...(r || {}) }) || (r && r.error) || "couldn't be added to the catalog"}`); }
       if (st.status === "variant") { o.text = st.name; o.variant_id = st.v.id; }
+      const cz = l.size_code === "custom"; o.size_1 = cz && l.size_1 !== "" ? Number(l.size_1) : null; o.size_2 = cz && l.size_2 !== "" ? Number(l.size_2) : null; o.size_3 = cz && l.size_3 !== "" ? Number(l.size_3) : null; o.size_unit = cz ? l.size_unit || "in" : "in"; o.size_basis = cz ? l.size_basis || "piece" : "piece";
       else { const p = cat.byProduct.get(l.product_id) || { name: l.product_id }; const parts = [l.size_code && l.size_code !== "standard" ? sizeName(p, l.size_code) : "", [colorName(l.c1), colorName(l.c2)].filter(Boolean).join(" + ")].filter(Boolean); o.text = p.name + (parts.length ? ` (${parts.join(", ")})` : ""); }
     } else { o.text = String(l.text).trim(); if (l.inv) o.notion_inventory_id = l.inv; if (l.untracked && !l.inv) o.untracked = true; }
     out.push(o);
