@@ -270,16 +270,22 @@ function statusHint(o) {
   return null;
 }
 
-function lineHtml(o, l) {
+// catalog tags on a line's item: the collections that pin this exact design + colorway (e.g. Neon Halloween)
+const lineTag = (l) => { if (lineKind(l) === "enc") return ""; const r = invRowOf(l); return r && r.tags ? String(r.tags).trim() : ""; };
+const stripPrefix = (base, prefixes) => { for (const p of prefixes) { if (p && base.toLowerCase().startsWith(String(p).toLowerCase() + " - ")) { const rest = base.slice(String(p).length + 3).trim(); if (rest) return rest; } } return base; };
+// one label on the card when every tagged line on the order is the same special version; otherwise each line carries its own
+const orderTag = (o) => { const tags = (o.lines || []).map(lineTag).filter(Boolean); return tags.length > 1 && tags.every((t) => t === tags[0]) ? tags[0] : ""; };
+
+function lineHtml(o, l, cardTag = "") {
   const e = eff(l); const kind = e.kind; const head = kind === "enc"; const key = l.uid; const open = BIN.open === key; const busy = store.busy.has("l:" + key);
   const canMark = kind === "print"; const packable = canPack(l); const pull = e.st === "shelf" || (e.st === "packed" && e.from === "shelf");
   const cls = (e.st === "packed" ? "s-packed " + (e.from === "shelf" ? "s-shelf" : "s-done") : e.st === "print" ? "s-print" : e.st === "printing" ? "s-printing" : e.st === "printed" ? "s-done" : e.st === "shelf" ? "s-shelf" : e.st === "out" ? "s-out" : "") + (head ? " s-head" : "");
   const r = invRowOf(l); const qty = Number(l.qty) || 1;
-  const name = r ? splitName(r.item) : null; const tag = !head && r && r.tags ? String(r.tags).trim() : "";
-  // a special version of a design (catalog tags, e.g. Neon Halloween) shows as a label, not as a prefix in the name
-  const base = name && tag && name.base.toLowerCase().startsWith(tag.toLowerCase() + " - ") ? name.base.slice(tag.length + 3).trim() || name.base : name ? name.base : "";
+  const name = r ? splitName(r.item) : null; const tag = lineTag(l);
+  // the design name alone: the collection or special-version prefix ("Gothic - ", "Neon Halloween - ") is context, shown as a label instead
+  const base = name ? stripPrefix(name.base, [tag, r.collection]) : "";
   const label = head ? encHead(l) : (qty > 1 ? qty + " × " : "") + (name ? base + (name.size || name.color ? ` (${[name.size, name.color].filter(Boolean).join(", ")})` : "") : cleanText(l.text).replace(/^\d{1,2}\s*[x×]?\s+(?=[a-z])/i, ""));
-  const tagHtml = tag ? `<span class="bvtag">${esc(tag)}</span>` : "";
+  const tagHtml = tag && tag !== cardTag ? `<span class="bvtag">${esc(tag)}</span>` : "";
   const stIcon = e.st === "packed" ? "" : e.st === "printing" ? SV(IC.run, "f-run") : e.st === "printed" ? SV(IC.done, "f-done") : e.st === "shelf" ? SV(IC.shelf, "f-shelf") : e.st === "out" ? SV(IC.out, "f-out") : "";
   const said = cleanText(l.text); const freeNames = (o.freebie || []).map((f) => normName(f)).filter(Boolean);
   const marks = (l.tag === "addon" || (!l.tag && /add-?on/i.test(said)) ? `<span class="bvtype t-addon" role="img" aria-label="Add-on" data-tip="Add-on">${SVF(IC.tag).replace('fill="currentColor"', 'fill="none"')}</span>` : "")
@@ -322,17 +328,17 @@ export function cardHtml(o) {
   const hint = !busy && BIN.stOpen !== o.id ? statusHint(o) : null;
   const left = unpacked(o);
   const det = ((o.collections || []).length ? `<div class="nprop">${o.collections.map((c) => `<span class="np np-purple">${esc(c)}</span>`).join("")}</div>` : "") + (o.order_number ? `<div class="sub">#${esc(o.order_number)}</div>` : "") + (o.state ? `<div class="sub">${esc(o.state)}</div>` : "");
-  const pin = !!BIN.pinned[o.id];
+  const pin = !!BIN.pinned[o.id]; const cardTag = orderTag(o);
   const err = store.errs["o:" + o.id] ? `<div class="err">${esc(store.errs["o:" + o.id])}</div>` : "";
   return `<article class="ncard" data-ob="${o.id}">
     <div class="ncard-t"><button type="button" class="nedit" data-obedit="${o.id}" title="Edit the order">${esc(o.customer)}<span class="nedit-i" aria-hidden="true">✎</span></button>${custBadge(o.customer)}${isExpress(o) ? '<span class="np np-red">Express</span>' : ""}${det ? `<button type="button" class="ndetails" data-det="${o.id}" aria-expanded="${pin}" title="Hover to peek, click to keep open">details${pin ? " ▴" : " ▾"}</button>` : ""}</div>
     ${det ? `<div class="ndet${pin ? " pinned" : ""}">${det}</div>` : ""}
-    <div class="nprop nstatwrap"><div class="nstatrow"><button type="button" class="np np-${NSTAT[cur] || "gray"} nstat" data-stopen="${o.id}" aria-haspopup="menu" aria-expanded="${BIN.stOpen === o.id}" ${busy ? "disabled" : ""} title="Change order status"><i></i>${esc(cur)}${busy ? " · saving…" : " ▾"}</button>${plats.map((p) => `<span class="np np-${platColor(p)}">${esc(p)}</span>`).join("")}
+    <div class="nprop nstatwrap"><div class="nstatrow"><button type="button" class="np np-${NSTAT[cur] || "gray"} nstat" data-stopen="${o.id}" aria-haspopup="menu" aria-expanded="${BIN.stOpen === o.id}" ${busy ? "disabled" : ""} title="Change order status"><i></i>${esc(cur)}${busy ? " · saving…" : " ▾"}</button>${plats.map((p) => `<span class="np np-${platColor(p)}">${esc(p)}</span>`).join("")}${cardTag ? `<span class="np np-purple">${esc(cardTag)}</span>` : ""}
       ${hint ? (hint.note ? `<span class="nsthint warn" title="${esc(hint.tip)}" role="img" aria-label="${esc(hint.tip)}">!</span>` : `<button type="button" class="nsthint" data-hint="${esc(hint.to)}" data-oid="${o.id}" title="${esc(hint.tip)}">→ ${esc(hint.to)}</button>`) : ""}</div>
       ${BIN.stOpen === o.id && !busy ? `<div class="nmenu nstatmenu" role="menu" aria-label="Order status for ${esc(o.customer)}">${OB_PICK.map((x) => { const lock = x === "Done" && left && x !== cur; return `<button type="button" role="menuitemradio" aria-checked="${x === cur}" data-ost="${esc(x)}" data-oid="${o.id}" ${lock ? "disabled" : ""}>${x === cur ? "✓ " : ""}${esc(x)}${lock ? ` <span class="sub">(pack ${left} more)</span>` : ""}</button>`; }).join("")}</div>` : ""}</div>
     ${o.important ? (plats.some((p) => /tiktok/i.test(p)) ? `<div class="nprop nimp ntiktok" title="TikTok name">${esc(o.important).split("\n").map((x) => x.trim()).filter(Boolean).join("<br>")}</div>` : `<div class="nprop nimp">${esc(o.important)}</div>`) : ""}
     ${err}
-    <div class="nlines">${ordered.map((l) => lineHtml(o, l)).join("") || '<div class="sub">No items on this order.</div>'}</div>
+    <div class="nlines">${ordered.map((l) => lineHtml(o, l, cardTag)).join("") || '<div class="sub">No items on this order.</div>'}</div>
     ${(o.freebie || []).length ? `<div class="sub nfree"><span class="bvtype t-free" aria-hidden="true">${SVF(IC.gift).replace('fill="currentColor"', 'fill="none"')}</span> ${o.freebie.map(esc).join(", ")}</div>` : ""}
     <div class="ncard-f">${o.order_date ? `Ordered ${esc(fmtDay(o.order_date))}` : ""}<span style="flex:1"></span>v${o.version}</div>
   </article>`;
