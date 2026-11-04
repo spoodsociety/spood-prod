@@ -337,11 +337,13 @@ export function cardHtml(o) {
   const err = store.errs["o:" + o.id] ? `<div class="err">${esc(store.errs["o:" + o.id])}</div>` : "";
   return `<article class="ncard" data-ob="${o.id}">
     <div class="ncard-t"><button type="button" class="nedit" data-obedit="${o.id}" title="Edit the order">${esc(o.customer)}<span class="nedit-i" aria-hidden="true">✎</span></button>${custBadge(o.customer)}${isExpress(o) ? '<span class="np np-red">Express</span>' : ""}${det ? `<button type="button" class="ndetails" data-det="${o.id}" aria-expanded="${pin}" title="Hover to peek, click to keep open">details${pin ? " ▴" : " ▾"}</button>` : ""}</div>
+    ${o.handle ? `<div class="nhandle">${esc(o.handle).split("\n").map((x) => x.trim()).filter(Boolean).join(" · ")}</div>` : ""}
     ${det ? `<div class="ndet${pin ? " pinned" : ""}">${det}</div>` : ""}
     <div class="nprop nstatwrap"><div class="nstatrow"><button type="button" class="np np-${NSTAT[cur] || "gray"} nstat" data-stopen="${o.id}" aria-haspopup="menu" aria-expanded="${BIN.stOpen === o.id}" ${busy ? "disabled" : ""} title="Change order status"><i></i>${esc(cur)}${busy ? " · saving…" : " ▾"}</button>${plats.map((p) => `<span class="np np-${platColor(p)}">${esc(p)}</span>`).join("")}${cardTag ? `<span class="np np-purple">${esc(cardTag)}</span>` : ""}
       ${hint ? (hint.note ? `<span class="nsthint warn" title="${esc(hint.tip)}" role="img" aria-label="${esc(hint.tip)}">!</span>` : `<button type="button" class="nsthint" data-hint="${esc(hint.to)}" data-oid="${o.id}" title="${esc(hint.tip)}">→ ${esc(hint.to)}</button>`) : ""}</div>
       ${BIN.stOpen === o.id && !busy ? `<div class="nmenu nstatmenu" role="menu" aria-label="Order status for ${esc(o.customer)}">${OB_PICK.map((x) => { const lock = x === "Done" && left && x !== cur; return `<button type="button" role="menuitemradio" aria-checked="${x === cur}" data-ost="${esc(x)}" data-oid="${o.id}" ${lock ? "disabled" : ""}>${x === cur ? "✓ " : ""}${esc(x)}${lock ? ` <span class="sub">(pack ${left} more)</span>` : ""}</button>`; }).join("")}</div>` : ""}</div>
-    ${o.important ? (plats.some((p) => /tiktok/i.test(p)) ? `<div class="nprop nimp ntiktok" title="TikTok name">${esc(o.important).split("\n").map((x) => x.trim()).filter(Boolean).join("<br>")}</div>` : `<div class="nprop nimp">${esc(o.important)}</div>`) : ""}
+    ${o.important ? `<div class="nimp">${esc(o.important).split("\n").map((x) => x.trim()).filter(Boolean).join("<br>")}</div>` : ""}
+    ${o.summary ? `<div class="nnotes">${esc(o.summary).split("\n").map((x) => x.trim()).filter(Boolean).join("<br>")}</div>` : ""}
     ${err}
     <div class="nlines">${ordered.map((l) => lineHtml(o, l, cardTag)).join("") || '<div class="sub">No items on this order.</div>'}</div>
     ${(o.freebie || []).length ? `<div class="sub nfree"><span class="bvtype t-free" aria-hidden="true">${SVF(IC.gift).replace('fill="currentColor"', 'fill="none"')}</span> ${o.freebie.map(esc).join(", ")}</div>` : ""}
@@ -630,7 +632,7 @@ function lineRowHtml(l, i) {
   }
   const x = RES.get((l.text || "").trim());
   const flag = l.untracked ? `<span class="flag ok">Not tracked</span>` : isEncText(l.text) ? `<span class="flag ok">Enclosure heading</span>` : `<span class="flag${x && ["variant", "creatable", "untracked"].includes(x.status) ? " ok" : ""}">${esc(resolveWord(x))}</span>${x && x.status !== "variant" ? `<button type="button" class="btn ghost mini" data-addcat="${i}">Add to catalog</button>` : ""}`;
-  return `<div class="line text${l.tag ? " t-" + l.tag : ""}" data-k="${i}" ${l.uid ? `data-uid="${l.uid}"` : ""}><div class="nm ta"><input class="li-text" data-l="${i}" data-lf="text" value="${esc(l.text)}" autocomplete="off" aria-label="Item ${i + 1}" placeholder="Item as written"><div class="ta-list" hidden></div><small>Not a catalog item${state}${packed}</small><span class="row" style="justify-content:flex-start;gap:6px">${flag}${tagBtns(i, l)}</span></div>
+  return `<div class="line text${l.tag ? " t-" + l.tag : ""}" data-k="${i}" ${l.uid ? `data-uid="${l.uid}"` : ""}><div class="nm ta"><input class="li-text" data-l="${i}" data-lf="text" value="${esc(l.text)}" autocomplete="off" aria-label="Item ${i + 1}" placeholder="Item as written"><div class="ta-list" hidden></div><small>Not a catalog item${state}${packed}</small><span class="row" style="justify-content:flex-start;gap:6px">${flag}${tagBtns(i, l)}<button type="button" class="btn ghost mini" data-tonotes="${i}" title="Not something to pack: move it to the order notes">→ order notes</button></span></div>
     <input type="number" min="1" max="99" value="${q}" data-l="${i}" data-lf="qty" aria-label="Quantity">
     <div class="szc"><label class="utk"><input type="checkbox" data-l="${i}" data-lf="untracked" ${l.untracked ? "checked" : ""}> Not tracked</label></div><div class="clc"></div><div class="ntc">${noteIn}</div>${del}</div>`;
 }
@@ -707,8 +709,8 @@ function formDraw(f, host) {
       <label class="utk" style="align-self:end;padding-bottom:12px"><input type="checkbox" data-f="repeat_customer" ${f.repeat_customer ? "checked" : ""}> Repeat customer</label>
     </div>
     <div class="grid2">
-      <label class="f">Important <span class="opt">(shows in red on the card)</span><input data-f="important" value="${esc(f.important)}" autocomplete="off"></label>
-      <label class="f">Notes <span class="opt">(optional)</span><input data-f="summary" value="${esc(f.summary)}" autocomplete="off"></label>
+      <label class="f">Important <span class="opt">(red banner on the card)</span><input data-f="important" value="${esc(f.important)}" autocomplete="off"></label>
+      <label class="f fwide">Order notes <span class="opt">(context for the order, not a packable item)</span><textarea data-f="summary" rows="2">${esc(f.summary)}</textarea></label>
     </div>
     ${encSizes.length ? `<div><div class="lbl">Enclosure</div><div class="seg" role="group" aria-label="Enclosure"><button type="button" data-enc="" aria-pressed="${!enc}">None</button>${encSizes.map((s) => `<button type="button" data-enc="${esc(s.code)}" aria-pressed="${enc === s.code}">${esc(s.name)}</button>`).join("")}</div></div>` : ""}
     <div class="grid2">
@@ -813,6 +815,7 @@ function wireForm(host, custs) {
       if (f.lines.length && !(await confirmBox({ title: "Replace the items?", body: "The past order's items replace what's listed now.", ok: "Replace" }))) return; f.lines = lines; formRender(); return; }
     if ((b = t.closest("[data-tag]"))) { read(); const l = f.lines[+b.dataset.l]; if (l) l.tag = l.tag === b.dataset.tag ? "" : b.dataset.tag; formRender(); return; }
     if ((b = t.closest("[data-del]"))) { read(); f.lines.splice(+b.dataset.del, 1); formRender(); return; }
+    if ((b = t.closest("[data-tonotes]"))) { read(); const l = f.lines[+b.dataset.tonotes]; const txt = [cleanText(l.text), l.note].map((x) => String(x || "").trim()).filter(Boolean).join(" — "); f.summary = [f.summary.trim(), txt].filter(Boolean).join("\n"); f.lines.splice(+b.dataset.tonotes, 1); formRender(); return; }
     if ((b = t.closest("[data-addcat]"))) { read(); const i = +b.dataset.addcat; const l = f.lines[i]; if (!l) return;
       const p = l.kind === "pick" ? cat.byProduct.get(l.product_id) : null; const x = l.kind === "text" ? RES.get(l.text.trim()) || {} : {}; const a = x.add || {};
       const pre = l.kind === "pick" ? { text: p ? p.name : "", product: p ? p.name : "", size: p ? sizeName(p, l.size_code) : "", color_1: colorName(l.c1), color_2: colorName(l.c2) } : { text: l.text, product: a.product || "", size: a.size || "", color_1: a.color_1 || "", color_2: a.color_2 || "" };
