@@ -272,7 +272,6 @@ function statusHint(o) {
 
 // catalog tags on a line's item: the collections that pin this exact design + colorway (e.g. Neon Halloween)
 const lineTag = (l) => { if (lineKind(l) === "enc") return ""; const r = invRowOf(l); return r && r.tags ? String(r.tags).trim() : ""; };
-const stripPrefix = (base, prefixes) => { for (const p of prefixes) { if (p && base.toLowerCase().startsWith(String(p).toLowerCase() + " - ")) { const rest = base.slice(String(p).length + 3).trim(); if (rest) return rest; } } return base; };
 // one label on the card when every tagged line on the order is the same special version; otherwise each line carries its own
 const orderTag = (o) => { const tags = (o.lines || []).map(lineTag).filter(Boolean); return tags.length > 1 && tags.every((t) => t === tags[0]) ? tags[0] : ""; };
 
@@ -281,10 +280,9 @@ function lineHtml(o, l, cardTag = "") {
   const canMark = kind === "print"; const packable = canPack(l); const pull = e.st === "shelf" || (e.st === "packed" && e.from === "shelf");
   const cls = (e.st === "packed" ? "s-packed " + (e.from === "shelf" ? "s-shelf" : "s-done") : e.st === "print" ? "s-print" : e.st === "printing" ? "s-printing" : e.st === "printed" ? "s-done" : e.st === "shelf" ? "s-shelf" : e.st === "out" ? "s-out" : "") + (head ? " s-head" : "");
   const r = invRowOf(l); const qty = Number(l.qty) || 1;
-  const name = r ? splitName(r.item) : null; const tag = lineTag(l);
-  // the design name alone: the collection or special-version prefix ("Gothic - ", "Neon Halloween - ") is context, shown as a label instead
-  const base = name ? stripPrefix(name.base, [tag, r.collection]) : "";
-  const label = head ? encHead(l) : (qty > 1 ? qty + " × " : "") + (name ? base + (name.size || name.color ? ` (${[name.size, name.color].filter(Boolean).join(", ")})` : "") : cleanText(l.text).replace(/^\d{1,2}\s*[x×]?\s+(?=[a-z])/i, ""));
+  const tag = lineTag(l);
+  // the catalog's own name for the item (product name + size/color); a special version shows as a label, not a prefix
+  const label = head ? encHead(l) : (qty > 1 ? qty + " × " : "") + (r ? r.name || r.item : cleanText(l.text).replace(/^\d{1,2}\s*[x×]?\s+(?=[a-z])/i, ""));
   const tagHtml = tag && tag !== cardTag ? `<span class="bvtag">${esc(tag)}</span>` : "";
   const stIcon = e.st === "packed" ? "" : e.st === "printing" ? SV(IC.run, "f-run") : e.st === "printed" ? SV(IC.done, "f-done") : e.st === "shelf" ? SV(IC.shelf, "f-shelf") : e.st === "out" ? SV(IC.out, "f-out") : "";
   const said = cleanText(l.text); const freeNames = (o.freebie || []).map((f) => normName(f)).filter(Boolean);
