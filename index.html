@@ -185,9 +185,9 @@ button.ntext{background:none;border:0;padding:0;margin:0;font:inherit;text-align
 .bvst{width:20px;height:20px;margin-top:2px;border-radius:50%;border:0;padding:0;background:none;cursor:pointer}
 .s-print>.bvst{background:radial-gradient(circle,var(--st-print) 6.5px,transparent 7px)}
 .s-printing>.bvst{display:grid;place-items:center}.s-printing>.bvst::before{content:"";width:13px;height:13px;border-radius:50%;border:2px solid var(--st-run);background:linear-gradient(90deg,var(--st-run) 50%,transparent 50%)}
-.nline.s-print .ntext{color:var(--st-print);font-weight:700}
-.nline.s-printing .ntext{color:var(--st-run);font-weight:700}
-.nline.s-done .ntext{color:var(--st-ok);font-weight:700}
+.nline.s-print .ntext{color:var(--st-print);font-weight:500}
+.nline.s-printing .ntext{color:var(--st-run);font-weight:500}
+.nline.s-done .ntext{color:var(--st-ok);font-weight:500}
 .nline.s-out .ntext{color:var(--fg)}
 .nline.s-packed .ntext{text-decoration:line-through;color:var(--muted);font-weight:400}
 .nline .bvsub{justify-self:start;font:500 .75rem/1.3 var(--body);color:var(--muted)}
@@ -594,7 +594,7 @@ label.allto{display:flex;flex-direction:row;gap:6px;align-items:center;font-size
 <div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
 <div id="modalHost"></div>
 
-<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611031910","./orders.js":"./orders.js?v=2611031910","./printplan.js":"./printplan.js?v=2611031910","./inventory.js":"./inventory.js?v=2611031910"}}</script>
+<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611031914","./orders.js":"./orders.js?v=2611031914","./printplan.js":"./printplan.js?v=2611031914","./inventory.js":"./inventory.js?v=2611031914"}}</script>
 <script type="module">
 import * as db from "./supabase.js";
 import * as orders from "./orders.js";
