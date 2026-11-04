@@ -94,6 +94,10 @@ export function lineKind(l) {
   if (NOT_PRINTED.test(t) && !/\b(hide|ledge|climb|floor|insert|cauldron|bowl|feeder)\b/i.test(t.replace(/starter\s*kit/i, ""))) return "stock";
   return "print";
 }
+// the measurements a custom piece is made to, as written on the order: "5.9” W x 9.84” H", "Fits 4.7 x 4.7", "3 3/4”"
+const NUM = String.raw`\d+(?:[.,]\d+)?(?:[\s-]+\d+\/\d+)?(?:\s*(?:[”"″']|cm|mm|in(?:ch(?:es)?)?\b))?(?:\s*[WHLD]\b)?`;
+const DIMS = new RegExp(String.raw`(?:(?:fits|measurements?|enclosure size|size)\s*:?\s*)?(?:${NUM}\s*[x×X]\s*${NUM}(?:\s*[x×X]\s*${NUM})?|\d+(?:[.,]\d+)?(?:[\s-]+\d+\/\d+)?\s*(?:[”"″]|cm|mm|in(?:ch(?:es)?)?\b))(?:\s*(?:enclosure(?:\s*size)?|\(enclosure\)))?`, "i");
+export const measureOf = (text, note) => { if (DIMS.test(String(note || ""))) return String(note).replace(/\s+/g, " ").trim(); const m = String(text || "").match(DIMS); return m ? m[0].replace(/\s+/g, " ").trim() : ""; };
 export const isCustom = (t) => /custom|\d+(\.\d+)?\s*(cm|mm|in\b|inch|"|”|″)|\d\s*[x×]\s*\d/i.test(String(t || ""));
 export const invRowOf = (l) => (l.notion_inventory_id ? store.invById.get(l.notion_inventory_id) : null) || null;
 // the enclosure variant a line is linked to, from its catalog sku: enclosure-small, enclosure-large, enclosure-small-magnetic
@@ -291,6 +295,8 @@ function lineHtml(o, l, cardTag = "") {
   const icon = marks + stIcon;
   const sub = e.st === "out" ? `<span class="bvsub">${(r && Number(r.in_stock) > 0 ? "Reserved for earlier orders" : "Out of stock")}${e.a ? ` · ${e.a} of ${qty} on the shelf` : ""}</span>` : e.part ? `<span class="bvsub">${e.a} of ${qty} on the shelf · print ${qty - e.a}</span>` : (l.match === "unmatched" && !head ? `<button type="button" class="ninvfind" data-oeline="${key}" data-oid="${o.id}">Not in catalog</button>` : "");
   const noteHtml = l.note ? `<span class="bvsub bvnote">${esc(l.note)}</span>` : "";
+  const dims = !head && (r ? /\(custom\b/i.test(r.item) : isCustom(l.text)) ? measureOf(l.text, l.note) : "";
+  const dimsHtml = dims && !(l.note && l.note.includes(dims)) ? `<span class="bvsub bvdims">${esc(dims)}</span>` : "";
   const tip = `${e.st === "packed" ? "Packed" : LAB[e.st] || ""}${l.state_by ? " · " + l.state_by : ""}\nOrder says: ${cleanText(l.text)}`;
   const box = head ? `<input type="checkbox" class="npack" data-pack="${key}" data-oid="${o.id}" data-from="${pull ? "shelf" : "print"}" ${l.packed ? "checked" : ""} ${packable && !busy ? "" : "disabled"} aria-label="Packed: ${esc(cleanText(l.text))}">`
     : `<span class="bvbox" data-tip="${l.packed ? "Packed" : packable ? "Mark packed" : "Can't pack yet"}"><input type="checkbox" class="npack" data-pack="${key}" data-oid="${o.id}" data-from="${pull ? "shelf" : "print"}" ${l.packed ? "checked" : ""} ${packable && !busy ? "" : "disabled"} aria-label="Packed: ${esc(cleanText(l.text))}"></span>`;
@@ -315,7 +321,7 @@ function lineHtml(o, l, cardTag = "") {
     menu = `<div class="nmenu" role="menu" aria-label="Status for ${esc(cleanText(l.text))}">${menu}</div>`;
   }
   const err = store.errs["l:" + key] ? `<div class="err lerr">${esc(store.errs["l:" + key])}</div>` : "";
-  return `<div class="nline ${cls}" data-line="${key}">${dot || box}${text}${stockBubble}${sub}${noteHtml}${busy ? `<span class="bvsub">Saving…</span>` : ""}${err}${menu}</div>`;
+  return `<div class="nline ${cls}" data-line="${key}">${dot || box}${text}${stockBubble}${sub}${dimsHtml}${noteHtml}${busy ? `<span class="bvsub">Saving…</span>` : ""}${err}${menu}</div>`;
 }
 
 export function cardHtml(o) {
