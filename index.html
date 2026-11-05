@@ -160,6 +160,12 @@ details.fold:not([open])>summary::after{transform:rotate(-90deg)}
 .nsthint{font:inherit;font-size:.74rem;line-height:1.2;padding:2px 8px;border-radius:999px;border:1px dashed var(--line);background:transparent;color:var(--muted);cursor:pointer}
 .nsthint:hover{border-style:solid;color:var(--fg)}
 .nsthint.warn{cursor:default;border:1.5px solid var(--warn);color:var(--warn);width:17px;height:17px;padding:0;display:inline-flex;align-items:center;justify-content:center;font-weight:800;font-size:.68rem;line-height:1}
+.nsrc{display:flex;flex-direction:column;gap:4px;padding:6px 10px;border-radius:10px;border:1px solid var(--line);font-size:.8rem}.nsrc.pending{border-color:var(--st-out);background:color-mix(in srgb,var(--st-out) 8%,transparent)}
+.nsrchead{display:flex;flex-wrap:wrap;align-items:center;gap:6px}.nsrchead .btn.mini{margin-left:auto}
+.nsrcline{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;line-height:1.35}.nsrcline b{font-weight:600}
+.nsrcvar{display:inline-flex;flex-wrap:wrap;gap:4px}.nsrcvar span{padding:0 6px;border-radius:999px;background:var(--check);color:var(--muted);font-size:.74rem;white-space:nowrap}
+.nsrcnote{color:var(--fg);font-style:italic;overflow-wrap:anywhere}
+.nsrcbox{margin-top:8px;display:flex;flex-direction:column;gap:8px}.nsrcsale{display:flex;flex-direction:column;gap:3px;padding:8px 10px;border-radius:10px;border:1px solid var(--st-out);background:color-mix(in srgb,var(--st-out) 8%,transparent);font-size:.8rem}
 .nimp{color:var(--bad);font-weight:600;overflow-wrap:anywhere;font-size:.84rem;line-height:1.4;padding:6px 10px;border-radius:10px;background:var(--bad-soft);border-left:3px solid var(--bad)}
 .nnotes{color:var(--muted);font-size:.8rem;line-height:1.4;overflow-wrap:anywhere;padding:6px 10px;border-radius:10px;background:color-mix(in srgb,var(--fg) 5%,transparent)}
 .nhandle{font:500 .76rem/1.3 var(--body);color:var(--muted);margin-top:-4px}
@@ -573,6 +579,7 @@ label.allto{display:flex;flex-direction:row;gap:6px;align-items:center;font-size
     <div class="card">
       <div class="row"><h2>Bin View</h2><span style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><span class="binlay" role="group" aria-label="Show"><button type="button" data-binmode="open" aria-pressed="true">Open</button><button type="button" data-binmode="done" aria-pressed="false">Done</button></span><button class="btn" type="button" id="binNew">+ New order</button></span></div>
       <div class="sub" id="binStatus">Reading orders…</div>
+      <div id="binSources" class="nsrcbox" hidden></div>
       <div class="daychips" id="binDays" role="group" aria-label="Ship day"></div>
       <div class="row" style="justify-content:flex-start;gap:8px"><input id="binSearch" type="search" placeholder="Search customer, item or note" aria-label="Search bins" style="flex:1;min-width:160px">
         <select id="binPlat" aria-label="Platform"><option value="">All platforms</option></select><span class="binlay" id="binLay" role="group" aria-label="Layout"><button type="button" data-binlay="cols" title="One column per ship day">▥ Columns</button><button type="button" data-binlay="rows" title="One row per ship day">☰ Rows</button></span></div>
@@ -602,7 +609,7 @@ label.allto{display:flex;flex-direction:row;gap:6px;align-items:center;font-size
 <div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
 <div id="modalHost"></div>
 
-<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611050659","./orders.js":"./orders.js?v=2611050659","./printplan.js":"./printplan.js?v=2611050659","./inventory.js":"./inventory.js?v=2611050659"}}</script>
+<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611050721","./orders.js":"./orders.js?v=2611050721","./printplan.js":"./printplan.js?v=2611050721","./inventory.js":"./inventory.js?v=2611050721"}}</script>
 <script type="module">
 import * as db from "./supabase.js";
 import * as orders from "./orders.js";

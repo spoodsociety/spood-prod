@@ -37,7 +37,7 @@ export function confirmBox({ title, body, ok = "OK", danger = false }) {
 }
 
 /* ===================== store ===================== */
-export const store = { orders: [], open: [], inv: [], invById: new Map(), loadedAt: null, doneAt: null, err: "", errs: {}, listeners: new Set(), busy: new Set() };
+export const store = { orders: [], open: [], inv: [], invById: new Map(), sources: [], loadedAt: null, doneAt: null, err: "", errs: {}, listeners: new Set(), busy: new Set() };
 export const onChange = (fn) => { store.listeners.add(fn); return () => store.listeners.delete(fn); };
 // a screen that fails to draw must say so, not freeze on stale content
 export function emit() { for (const fn of store.listeners) { try { fn(); } catch (e) { console.error(e); toast("⚠ A screen couldn't update: " + ((e && e.message) || e) + " — reload the page", true); } } }
@@ -49,7 +49,7 @@ let loadSeq = 0;
 export async function load({ done = false } = {}) {
   const started = Date.now(); const seq = ++loadSeq;
   try {
-    const [open, doneRows, inv, opts] = await Promise.all([db.readOrders("open"), done ? db.readOrders("done") : null, db.inventoryRows(), cat.opts && !cat.stale ? null : db.catalogOptions()]);
+    const [open, doneRows, inv, opts, srcs] = await Promise.all([db.readOrders("open"), done ? db.readOrders("done") : null, db.inventoryRows(), cat.opts && !cat.stale ? null : db.catalogOptions(), db.unlinkedSources().catch((e) => { console.error(e); return null; })]);
     // something was saved (or a newer read started) while this read was in flight: this copy is already behind what the screen shows
     if (seq !== loadSeq) return;
     if (db.lastWriteAt() > started) { return load({ done }); }
@@ -59,6 +59,7 @@ export async function load({ done = false } = {}) {
     if (Array.isArray(doneRows)) store.doneAt = new Date();
     store.orders = [...openList, ...doneList];
     store.inv = Array.isArray(inv) ? inv : [];
+    if (Array.isArray(srcs)) store.sources = srcs;
     store.invById = new Map(store.inv.map((r) => [r.id, r]));
     store.loadedAt = new Date(); store.err = "";
     recompute();
@@ -327,6 +328,17 @@ function lineHtml(o, l, cardTag = "") {
   return `<div class="nline ${cls}" data-line="${key}">${dot || box}${text}${stockBubble}${sub}${dimsHtml}${noteHtml}${busy ? `<span class="bvsub">Saving…</span>` : ""}${err}${menu}</div>`;
 }
 
+// a sale item as the platform reported it: "2 × Silk Cocoon Hide — Set of 3 · Back Mount"
+const srcTitle = (t) => { const s = String(t || ""); const i = s.indexOf(" | "); return (i > 0 ? s.slice(i + 3) : s).replace(/,?\s*(Enclosure Decor|Enclosure Accessor(y|ies)).*$/i, "").trim() || s; };
+export const srcItemHtml = (it) => `<div class="nsrcline"><b>${Number(it.qty) > 1 ? esc(it.qty) + " × " : ""}${esc(srcTitle(it.title))}</b>${(it.variations || []).length ? `<span class="nsrcvar">${it.variations.map(([k, v]) => `<span title="${esc(k)}">${esc(v)}</span>`).join("")}</span>` : ""}${it.personalization ? `<span class="nsrcvar"><span>${esc(it.personalization)}</span></span>` : ""}</div>`;
+export const confirmReview = (o) => act("o:" + o.id, () => db.confirmReview(o.id), { reload: o.id });
+// the sale(s) behind an order, shown under the status row: always the number; the items while the order awaits review
+const sourcesHtml = (o) => {
+  const ss = o.sources || []; if (!ss.length) return "";
+  const pending = o.review === "pending"; const busy = store.busy.has("o:" + o.id);
+  return `<div class="nsrc${pending ? " pending" : ""}"><div class="nsrchead">${ss.map((s) => `<span class="np np-${platColor(s.platform)}">${esc(s.platform)} #${esc(s.number)}</span>`).join("")}${pending ? `<span class="np np-orange">Review</span><button type="button" class="btn mini accent" data-review="${o.id}" ${busy ? "disabled" : ""}>Confirmed</button>` : ""}</div>${pending ? ss.map((s) => `${(s.items || []).map(srcItemHtml).join("")}${s.note ? `<div class="nsrcnote">${esc(s.note)}</div>` : ""}`).join("") : ""}</div>`;
+};
+
 export function cardHtml(o) {
   const cur = obPick(o.status); const busy = store.busy.has("o:" + o.id); const plats = o.platform || [];
   const lines = [...(o.lines || [])].sort((a, b) => a.line_no - b.line_no);
@@ -344,6 +356,7 @@ export function cardHtml(o) {
     <div class="nprop nstatwrap"><div class="nstatrow"><button type="button" class="np np-${NSTAT[cur] || "gray"} nstat" data-stopen="${o.id}" aria-haspopup="menu" aria-expanded="${BIN.stOpen === o.id}" ${busy ? "disabled" : ""} title="Change order status"><i></i>${esc(cur)}${busy ? " · saving…" : " ▾"}</button>${plats.map((p) => `<span class="np np-${platColor(p)}">${esc(p)}</span>`).join("")}${cardTag ? `<span class="np np-purple">${esc(cardTag)}</span>` : ""}
       ${hint ? (hint.note ? `<span class="nsthint warn" title="${esc(hint.tip)}" role="img" aria-label="${esc(hint.tip)}">!</span>` : `<button type="button" class="nsthint" data-hint="${esc(hint.to)}" data-oid="${o.id}" title="${esc(hint.tip)}">→ ${esc(hint.to)}</button>`) : ""}</div>
       ${BIN.stOpen === o.id && !busy ? `<div class="nmenu nstatmenu" role="menu" aria-label="Order status for ${esc(o.customer)}">${OB_PICK.map((x) => { const lock = x === "Done" && left && x !== cur; return `<button type="button" role="menuitemradio" aria-checked="${x === cur}" data-ost="${esc(x)}" data-oid="${o.id}" ${lock ? "disabled" : ""}>${x === cur ? "✓ " : ""}${esc(x)}${lock ? ` <span class="sub">(pack ${left} more)</span>` : ""}</button>`; }).join("")}</div>` : ""}</div>
+    ${sourcesHtml(o)}
     ${o.important ? `<div class="nimp">${esc(o.important).split("\n").map((x) => x.trim()).filter(Boolean).join("<br>")}</div>` : ""}
     ${o.summary ? `<div class="nnotes">${esc(o.summary).split("\n").map((x) => x.trim()).filter(Boolean).join("<br>")}</div>` : ""}
     ${err}
@@ -364,7 +377,9 @@ export function binRender() {
 function binDraw(box) {
   const st = $("#binStatus");
   const nocat = store.open.reduce((n, o) => n + (o.lines || []).filter((l) => l.match === "unmatched" && !isEncText(l.text)).length, 0);
-  if (st) st.textContent = store.err ? "⚠ " + store.err : store.loadedAt ? `${plural(store.open.length, "open order")}${nocat ? ` · ⚠ ${plural(nocat, "line")} not in the catalog` : ""} · synced ${store.loadedAt.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })} · refreshes every 20 s` : "Reading orders…";
+  const review = store.open.filter((o) => o.review === "pending").length;
+  if (st) st.textContent = store.err ? "⚠ " + store.err : store.loadedAt ? `${plural(store.open.length, "open order")}${nocat ? ` · ⚠ ${plural(nocat, "line")} not in the catalog` : ""}${review ? ` · ${review} to review` : ""} · synced ${store.loadedAt.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })} · refreshes every 20 s` : "Reading orders…";
+  const ns = $("#binSources"); if (ns) { const s = store.sources || []; ns.hidden = !s.length || BIN.mode === "done"; ns.innerHTML = s.length ? `<div class="nsrchead"><span class="np np-orange">⚠ ${plural(s.length, "sale")} not entered</span></div>${s.map((x) => `<div class="nsrcsale"><div class="nsrchead"><b>${esc(x.buyer || "")}</b><span class="np np-${platColor(x.platform)}">${esc(x.platform)} #${esc(x.number)}</span><span class="sub">ordered ${esc(fmtDay(x.order_date))}${x.ship_by ? ` · ship by ${esc(fmtDay(x.ship_by))}` : ""}</span><button type="button" class="btn ghost mini" data-srcnew="${x.id}">+ Enter order</button></div>${(x.items || []).map(srcItemHtml).join("")}${x.note ? `<div class="nsrcnote">${esc(x.note)}</div>` : ""}</div>`).join("")}` : ""; }
   const sel = $("#binPlat"); if (sel) { const plats = [...new Set(store.orders.flatMap((o) => o.platform || []))].sort(); const cur = sel.value; sel.innerHTML = `<option value="">All platforms</option>` + plats.map((p) => `<option ${p === cur ? "selected" : ""}>${esc(p)}</option>`).join(""); }
   document.querySelectorAll("[data-binlay]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.binlay === BIN.layout)));
   document.querySelectorAll("[data-binmode]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.binmode === BIN.mode)));
@@ -424,6 +439,7 @@ function binScrollbar(bar, board) {
 
 function binWire() {
   const box = $("#binList");
+  const srcBox = $("#binSources"); if (srcBox) srcBox.addEventListener("click", (e) => { const b = e.target.closest("[data-srcnew]"); if (!b) return; const s = (store.sources || []).find((x) => String(x.id) === b.dataset.srcnew); if (s) openOrderForm(null, null, formFromSource(s)); });
   $("#binSearch").oninput = () => { BIN.doneLimit = 40; binRender(); }; $("#binPlat").onchange = () => { BIN.doneLimit = 40; binRender(); };
   document.addEventListener("click", (e) => { const b = e.target.closest("[data-binmode]"); if (!b || BIN.mode === b.dataset.binmode) return; BIN.mode = b.dataset.binmode; BIN.doneLimit = 40; BIN.open = null; BIN.stOpen = null; binRender(); if (BIN.mode === "done") load({ done: true }); });
   $("#binDays").addEventListener("click", (e) => { const b = e.target.closest("[data-day]"); if (!b) return; const k = b.dataset.day; if (k === "all") BIN.days = []; else BIN.days = BIN.days.includes(k) ? BIN.days.filter((x) => x !== k) : [...BIN.days, k]; binRender(); });
@@ -440,6 +456,7 @@ function binWire() {
     if ((b = t.closest("[data-doneundo]"))) { const o = orderOf(b.dataset.doneundo); if (!o) return; const to = o.done_prev && obPick(o.done_prev) !== "Done" ? obPick(o.done_prev) : "Not started";
       if (await confirmBox({ title: "Put back on the board?", body: `${esc(o.customer)} goes back to <b>${esc(to)}</b>. Any pieces it took off the shelf go back to Inventory.`, ok: "Put back" })) undoDone(o.id); return; }
     if ((b = t.closest("[data-det]"))) { BIN.pinned[b.dataset.det] = !BIN.pinned[b.dataset.det]; binRender(); return; }
+    if ((b = t.closest("[data-review]"))) { const o = orderOf(b.dataset.review); if (o) confirmReview(o); return; }
     if ((b = t.closest("[data-obedit]"))) { e.stopPropagation(); openOrderForm(orderOf(b.dataset.obedit)); return; }
     if ((b = t.closest("[data-oeline]"))) { e.stopPropagation(); BIN.open = null; openOrderForm(orderOf(b.dataset.oid), b.dataset.oeline); return; }
     if ((b = t.closest("[data-stopen]"))) { e.stopPropagation(); BIN.open = null; BIN.stOpen = BIN.stOpen === b.dataset.stopen ? null : b.dataset.stopen; binRender(); return; }
@@ -604,6 +621,11 @@ const encDoorOf = (f) => { const e = f.lines.find((l) => l.kind === "pick" && l.
 // door options the catalog has for an enclosure size (standard = latch door); a size with only one door shows no choice
 const encDoors = (size) => [...new Set(cat.variants.filter((v) => v.product_id === "enclosure" && v.size_code === size && !v.archived).map((v) => v.option_code || "standard"))].sort((a, b) => (a === "standard" ? -1 : 1) - (b === "standard" ? -1 : 1));
 
+// a sale as the platform reported it -> a new order to review: one text line per item (title + the chosen variations), the buyer note as order notes
+export function formFromSource(s) {
+  const lines = (s.items || []).map((it) => ({ kind: "text", text: [srcTitle(it.title), ...(it.variations || []).map(([, v]) => v), it.personalization || ""].filter(Boolean).join(" - "), qty: Number(it.qty) || 1, note: "", tag: "", untracked: false, src: "paste" }));
+  return { customer: s.buyer || "", platform: [s.platform], order_number: s.number, order_date: s.order_date || isoDay(), ship_by: s.ship_by || "", state: s.state || "", summary: s.note || "", lines, source_id: s.id };
+}
 export function openOrderForm(order = null, focusUid = null, pre = null) {
   const start = () => {
     F.form = order ? fromOrder(order) : blank(pre || {}); F.orig = snap(F.form); F.errors = []; F.review = null; F.focus = focusUid; F.custOpen = false;
@@ -890,6 +912,8 @@ async function saveForm() {
       const p = { customer: f.customer.trim(), repeat_customer: !!f.repeat_customer, handle: f.handle.trim() || null, platform: f.platform, order_number: f.order_number.trim() || null, shipping_number: f.shipping_number.trim() || null, order_date: f.order_date || null, ship_by: f.ship_by, ship_type: f.ship_type, status: "Not started", notes: lines.map((l) => l.text).join("\n"), important: f.important.trim() || null, summary: f.summary.trim() || null, freebie: [], items: [], collections, order_type: [], state: f.state.trim().toUpperCase() || null, lines };
       p.freebie = lines.filter((l) => l.tag === "gift").map((l) => l.text);
       const r = await db.saveOrder(p); F.busy = false;
+      // entered from a sale: link the sale to the new order (the order then carries the Review flag until confirmed)
+      if (f.source_id && r && r.id) { try { await db.linkSource(f.source_id, r.id); } catch (x) { toast("Saved, but the sale could not be linked: " + db.errText(x), true); } }
       if (r && Array.isArray(r.duplicates) && r.duplicates.length) toast(`Saved. Order #${f.order_number} is also on: ${r.duplicates.map((d) => d.customer).join(", ")}`, true); else toast(`Saved ${f.customer.trim()}${r && r.unmatched ? ` · ${plural(r.unmatched, "line")} not in the catalog` : ""}`);
       closeForm(); await load(); if (cat.stale) await loadCatalog(); return;
     }

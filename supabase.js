@@ -64,6 +64,11 @@ export const pickVariant = (p) => rpc("pick_variant", { p, p_by: me() || null })
 export const pickCollection = (p) => rpc("pick_collection", { p });
 export const updateVariant = async (p) => { const r = await rpc("update_variant", { p }); return Array.isArray(r) ? r[0] : r; };
 export const archiveVariant = (id) => rpc("archive_variant", { p_id: id });
+// sales as the platform reported them (hq.source_orders): the ones with no order yet; confirm an imported order's review; link a sale to an order
+export const unlinkedSources = () => rpc("unlinked_sources");
+export const confirmReview = (id) => rpc("confirm_review", { p_order_id: id, p_by: by() });
+export const linkSource = (sourceId, orderId) => rpc("link_source", { p_source_id: sourceId, p_order_id: orderId, p_by: by() });
+export const dismissSource = (sourceId, why) => rpc("dismiss_source", { p_source_id: sourceId, p_why: why, p_by: by() });
 export const readAppState = (keys = null, known = {}) => rpc("read_app_state", { keys, known });
 
 /* ---------- writes (every one carries op_id and p_by) ---------- */
