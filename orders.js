@@ -713,7 +713,7 @@ function formDraw(f, host) {
   const colls = [...cat.colls.values()].filter((c) => !c.archived).sort((a, b) => a.name.localeCompare(b.name));
   const coll = f.collection ? cat.colls.get(f.collection) : null;
   const choices = coll ? (enc ? coll.enclosure_choices : coll.choices) || {} : {};
-  const addons = (cat.opts.products || []).filter((p) => /^(Add-on|Kit|Supply)$/.test(p.category || "")).sort((a, b) => a.name.localeCompare(b.name));
+  const addons = (cat.opts.products || []).filter((p) => p.addon != null ? p.addon : /^(Add-on|Kit|Supply)$/.test(p.category || "")).sort((a, b) => a.name.localeCompare(b.name)); // products.addon flags the bar; category only for a catalog read before that flag existed
   host.innerHTML = `<div class="od">
     <div class="grid2">
       <div class="ta"><label class="f">Customer<input id="fCustomer" data-f="customer" value="${esc(f.customer)}" autocomplete="off" placeholder="Name or handle"></label><div class="ta-list" hidden></div></div>
