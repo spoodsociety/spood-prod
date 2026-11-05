@@ -240,7 +240,8 @@ const LAB = { print: "Needs printing", printing: "Printing", printed: "Printed",
 const encHead = (l) => { const t = cleanText(l.text); const m = t.match(/^(?:(\w+)\s+)?(?:complete\s+)?enclosure(s)?/i) || []; const n = Number(l.qty) > 1 ? Number(l.qty) : { two: 2, three: 3, four: 4 }[String(m[1] || "").toLowerCase()] || (/^\d+$/.test(m[1] || "") ? Number(m[1]) : 0); const v = encVar(l); const size = v ? v.size : ((t.match(/\b(large|small)\b/i) || [])[1] || "").toLowerCase(); return (n ? n + " " : "") + (size ? size[0].toUpperCase() + size.slice(1) + " " : "") + "Enclosure" + (n > 1 || m[2] ? "s" : ""); };
 // door pill (same look for Latch and Magnetic): the picked variant decides; an unlinked line goes by its words. A text/pick
 // disagreement is the server's conflict ("Text says Magnetic", shown under the line), so the chip is plain and never hedges.
-const encDoor = (l) => { const v = encVar(l); const t = cleanText(l.text); const door = v ? (v.opt === "magnetic" ? "magnetic" : "latch") : /magnet/i.test(t) ? "magnetic" : /latch/i.test(t) ? "latch" : ""; return door ? `<span class="ndoor">${door === "magnetic" ? "Magnetic" : "Latch"}</span>` : ""; };
+// Only sizes offered with both doors get a pill (Small today); the Large comes in latch only, so it shows none.
+const encDoor = (l) => { const v = encVar(l); const t = cleanText(l.text); const size = v ? v.size : ((t.match(/\b(large|small)\b/i) || [])[1] || "").toLowerCase(); if (size === "large") return ""; const door = v ? (v.opt === "magnetic" ? "magnetic" : "latch") : /magnet/i.test(t) ? "magnetic" : /latch/i.test(t) ? "latch" : ""; return door ? `<span class="ndoor">${door === "magnetic" ? "Magnetic" : "Latch"}</span>` : ""; };
 
 // lines on other open orders holding the same item that's printed/printing/on the shelf (latest ship date first)
 function takeFrom(o, l) {
