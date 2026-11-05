@@ -237,7 +237,9 @@ const glue = (label, icons) => { const m = String(label).match(/^(.*?)(\S+)\s*$/
 const LAB = { print: "Needs printing", printing: "Printing", printed: "Printed", shelf: "Pull from shelf", packed: "Packed", out: "Out of stock", none: "", head: "" };
 // heading for an enclosure line: size from the linked variant, else from the text; door type as a chip
 const encHead = (l) => { const t = cleanText(l.text); const m = t.match(/^(?:(\w+)\s+)?(?:complete\s+)?enclosure(s)?/i) || []; const n = Number(l.qty) > 1 ? Number(l.qty) : { two: 2, three: 3, four: 4 }[String(m[1] || "").toLowerCase()] || (/^\d+$/.test(m[1] || "") ? Number(m[1]) : 0); const v = encVar(l); const size = v ? v.size : ((t.match(/\b(large|small)\b/i) || [])[1] || "").toLowerCase(); return (n ? n + " " : "") + (size ? size[0].toUpperCase() + size.slice(1) + " " : "") + "Enclosure" + (n > 1 || m[2] ? "s" : ""); };
-const encDoor = (l) => { const t = cleanText(l.text); const v = encVar(l); const said = /magnet/i.test(t) ? "magnetic" : /latch/i.test(t) ? "latch" : ""; const door = v ? (v.opt || said) : said; if (!door) return ""; const off = v && said === "magnetic" && v.opt !== "magnetic"; return `<span class="ndoor${off ? " off" : ""}" ${off ? `data-tip="Order says magnet, but it's linked to the ${v.size} ${v.opt || "standard"} enclosure"` : ""}>${door === "magnetic" ? "Magnetic" : "Latch"}${off ? " ?" : ""}</span>`; };
+// door chip: the picked variant decides (standard = latch door, magnetic); an unlinked line goes by its words. A text/pick
+// disagreement is the server's conflict ("Text says Magnetic", shown under the line), so the chip is plain and never hedges.
+const encDoor = (l) => { const v = encVar(l); const t = cleanText(l.text); const door = v ? (v.opt === "magnetic" ? "magnetic" : "latch") : /magnet/i.test(t) ? "magnetic" : /latch/i.test(t) ? "latch" : ""; return door ? `<span class="ndoor${door === "magnetic" ? " mag" : ""}">${door === "magnetic" ? "Magnetic" : "Latch"}</span>` : ""; };
 
 // lines on other open orders holding the same item that's printed/printing/on the shelf (latest ship date first)
 function takeFrom(o, l) {
@@ -565,6 +567,7 @@ function textCheck(said, l, p) {
   let sz = /-(large|lg)-/.test(key) ? "large" : /-(small|sm|standard|regular|reg)-/.test(key) ? "small" : isCustom(said) ? "custom" : "";
   if (l.size_code === "custom" && isCustom(said)) sz = ""; if (p.id === "enclosure" && sz === "custom") sz = "";
   if (sz && l.size_code && sz !== l.size_code && !(sz === "small" && l.size_code === "standard")) return "Text says " + (sz === "custom" ? "custom size" : sz[0].toUpperCase() + sz.slice(1));
+  if (p.id === "enclosure") { const door = /-magnet/.test(key) ? "magnetic" : /-latch/.test(key) ? "standard" : ""; if (door && door !== (l.option_code || "standard")) return "Text says " + (door === "magnetic" ? "Magnetic" : "Latch"); }
   if (!productColors(p).any) return "";
   let k = key; const bad = [];
   const names = [...cat.colors.values()].flatMap((c) => [c.name, ...(c.aliases || [])].map((nm) => [c, "-" + nm.toLowerCase().replace(/[^a-z0-9]+/g, "-") + "-"])).sort((a, b) => b[1].length - a[1].length);
@@ -597,6 +600,9 @@ const fromOrder = (o) => {
 };
 const snap = (f) => JSON.stringify(f);
 const encSize = (f) => { const e = f.lines.find((l) => l.kind === "pick" && l.product_id === "enclosure"); return e ? e.size_code : ""; };
+const encDoorOf = (f) => { const e = f.lines.find((l) => l.kind === "pick" && l.product_id === "enclosure"); return e ? e.option_code || "standard" : "standard"; };
+// door options the catalog has for an enclosure size (standard = latch door); a size with only one door shows no choice
+const encDoors = (size) => [...new Set(cat.variants.filter((v) => v.product_id === "enclosure" && v.size_code === size && !v.archived).map((v) => v.option_code || "standard"))].sort((a, b) => (a === "standard" ? -1 : 1) - (b === "standard" ? -1 : 1));
 
 export function openOrderForm(order = null, focusUid = null, pre = null) {
   const start = () => {
@@ -728,7 +734,7 @@ function formDraw(f, host) {
       <label class="f">Important <span class="opt">(red banner on the card)</span><input data-f="important" value="${esc(f.important)}" autocomplete="off"></label>
       <label class="f fwide">Order notes <span class="opt">(context for the order, not a packable item)</span><textarea data-f="summary" rows="2">${esc(f.summary)}</textarea></label>
     </div>
-    ${encSizes.length ? `<div><div class="lbl">Enclosure</div><div class="seg" role="group" aria-label="Enclosure"><button type="button" data-enc="" aria-pressed="${!enc}">None</button>${encSizes.map((s) => `<button type="button" data-enc="${esc(s.code)}" aria-pressed="${enc === s.code}">${esc(s.name)}</button>`).join("")}</div></div>` : ""}
+    ${encSizes.length ? `<div><div class="lbl">Enclosure</div><div class="seg" role="group" aria-label="Enclosure"><button type="button" data-enc="" aria-pressed="${!enc}">None</button>${encSizes.map((s) => `<button type="button" data-enc="${esc(s.code)}" aria-pressed="${enc === s.code}">${esc(s.name)}</button>`).join("")}</div>${enc && encDoors(enc).length > 1 ? `<div class="seg" role="group" aria-label="Door" style="margin-left:8px">${encDoors(enc).map((d) => `<button type="button" data-door="${esc(d)}" aria-pressed="${encDoorOf(f) === d}">${d === "magnetic" ? "Magnetic" : "Latch"}</button>`).join("")}</div>` : ""}</div>` : ""}
     <div class="grid2">
       <label class="f">Collection<select data-f="collection"><option value="">None</option>${colls.map((c) => `<option value="${esc(c.id)}" ${c.id === f.collection ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label>
       ${Object.keys(choices).map((k) => `<div><div class="lbl">${esc(k)}</div><div class="pills">${(choices[k] || []).map((o) => `<button type="button" data-choice="${esc(k)}" data-opt="${esc(o)}" aria-pressed="${(f.choices[k] || (coll.defaults || {})[k]) === o}">${esc(o)}</button>`).join("")}</div></div>`).join("")}
@@ -774,19 +780,20 @@ async function reviewPaste(text) {
 // the collection's pieces as form lines (hq.pick_collection); the enclosure line is kept in step with the Enclosure switch
 async function applyCollection(f) {
   const coll = f.collection ? cat.colls.get(f.collection) : null; if (!coll) return;
-  const enc = encSize(f); const form = enc && coll.sells_enclosure ? "enclosure" : coll.sells_accessory_set ? "accessory" : "enclosure";
+  const enc = encSize(f); const door = encDoorOf(f); const form = enc && coll.sells_enclosure ? "enclosure" : coll.sells_accessory_set ? "accessory" : "enclosure";
   const choices = { ...(form === "enclosure" ? coll.defaults || {} : {}), ...f.choices };
   const res = await db.pickCollection({ collection: coll.id, form, size: enc || undefined, choices });
-  const fresh = (res.lines || []).map((x) => { const c = x.color_scheme_id ? schemeColors(x.color_scheme_id) : { c1: "", c2: "" }; return { kind: "pick", product_id: x.product_id, size_code: x.size || (x.product_id === "enclosure" ? enc : undefined), c1: c.c1, c2: c.c2, option_code: x.option || "standard", qty: Number(x.qty) || 1, note: "", untracked: false, src: x.product_id === "enclosure" ? "enclosure" : "collection" }; })
+  const fresh = (res.lines || []).map((x) => { const c = x.color_scheme_id ? schemeColors(x.color_scheme_id) : { c1: "", c2: "" }; return { kind: "pick", product_id: x.product_id, size_code: x.size || (x.product_id === "enclosure" ? enc : undefined), c1: c.c1, c2: c.c2, option_code: x.product_id === "enclosure" && encDoors(x.size || enc).includes(door) ? door : x.option || "standard", qty: Number(x.qty) || 1, note: "", untracked: false, src: x.product_id === "enclosure" ? "enclosure" : "collection" }; })
     .map((l) => ({ ...l, size_code: l.size_code || defaultSize(cat.byProduct.get(l.product_id) || {}, enc) }));
   const kept = f.lines.filter((l) => l.src !== "collection" && !(l.kind === "pick" && l.product_id === "enclosure" && fresh.some((x) => x.product_id === "enclosure")));
   if (form === "enclosure" && enc && !fresh.some((x) => x.product_id === "enclosure")) fresh.unshift(pickLine("enclosure", { size_code: enc, src: "enclosure" }));
   f.lines = [...fresh.filter((x) => x.product_id === "enclosure"), ...kept.filter(isEncLine), ...fresh.filter((x) => x.product_id !== "enclosure"), ...kept.filter((l) => !isEncLine(l))];
 }
+function setDoor(f, door) { const e = f.lines.find((l) => l.kind === "pick" && l.product_id === "enclosure"); if (e) e.option_code = door; }
 function setEnclosure(f, size) {
   const i = f.lines.findIndex((l) => l.kind === "pick" && l.product_id === "enclosure");
   if (!size) { if (i >= 0) f.lines.splice(i, 1); return; }
-  if (i >= 0) f.lines[i].size_code = size; else f.lines.unshift(pickLine("enclosure", { size_code: size, src: "enclosure" }));
+  if (i >= 0) { f.lines[i].size_code = size; if (!encDoors(size).includes(f.lines[i].option_code || "standard")) f.lines[i].option_code = "standard"; } else f.lines.unshift(pickLine("enclosure", { size_code: size, src: "enclosure" }));
   for (const l of f.lines) if (l.kind === "pick" && l.product_id !== "enclosure") { const p = cat.byProduct.get(l.product_id); if (p && (p.size_codes || []).some((s) => s.code === size) && l.size_code !== "custom") l.size_code = size; }
 }
 
@@ -824,6 +831,7 @@ function wireForm(host, custs) {
   host.onclick = async (e) => {
     const t = e.target; let b;
     if ((b = t.closest("[data-plat]"))) { read(); const p = b.dataset.plat; f.platform = f.platform.includes(p) ? f.platform.filter((x) => x !== p) : [...f.platform, p]; formRender(); return; }
+    if ((b = t.closest("[data-door]"))) { read(); setDoor(f, b.dataset.door); formRender(); return; }
     if ((b = t.closest("[data-enc]"))) { read(); setEnclosure(f, b.dataset.enc); if (f.collection) { try { await applyCollection(f); } catch (x) { toast(db.errText(x), true); } } formRender(); return; }
     if ((b = t.closest("[data-choice]"))) { read(); f.choices = { ...f.choices, [b.dataset.choice]: b.dataset.opt }; try { await applyCollection(f); } catch (x) { toast(db.errText(x), true); } formRender(); return; }
     if ((b = t.closest("[data-addon]"))) { read(); f.lines.push(pickLine(b.dataset.addon, { src: "addon", tag: "addon" })); formRender(); return; }
