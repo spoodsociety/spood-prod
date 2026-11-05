@@ -118,7 +118,7 @@ export const sizeLabel = (s) => (!s || /^(standard|default size)$/i.test(s) ? "S
 // spec from a line: inventory row name when matched, else the line text itself
 export function lineSpec(l) {
   const r = invRowOf(l);
-  if (r) { const sp = splitName(r.item); return { name: sp.base, size: sp.size, color: sp.color, inv: r.id, custom: false }; }
+  if (r) { const sp = splitName(r.item); return { name: sp.base, size: sp.size, color: sp.color, inv: r.id, custom: /^custom$/i.test(sp.size) }; }
   const t = cleanText(l.text).replace(/^\d{1,2}\s*[x×]?\s+(?=[a-z])/i, "");
   const parts = /\s[-–]\s/.test(t) ? t.split(/\s[-–]\s/) : t.split(/\s*,\s*/);
   const name = parts.shift().replace(/\(.*?\)/g, "").trim(); const det = parts.join(", ");
@@ -297,7 +297,7 @@ function lineHtml(o, l, cardTag = "") {
   const noteHtml = l.note ? `<span class="bvsub bvnote">${esc(l.note)}</span>` : "";
   const cv = l.variant_id != null ? cat.varById.get(String(l.variant_id)) : null; const customLine = !head && (cv ? cv.size_code === "custom" : !r && isCustom(l.text));
   const dims = customLine ? fmtSize(l) : "";
-  const dimsHtml = dims ? `<span class="bvsub bvdims">${esc(dims)}</span>` : customLine ? `<span class="bvsub bvmiss">Custom size missing</span>` : "";
+  const dimsHtml = (dims ? `<span class="bvsub bvdims">${esc(dims)}</span>` : customLine ? `<span class="bvsub bvmiss">Custom size missing</span>` : "") + (l.conflict ? `<span class="bvsub bvmiss">${esc(l.conflict)}</span>` : "");
   const tip = `${e.st === "packed" ? "Packed" : LAB[e.st] || ""}${l.state_by ? " · " + l.state_by : ""}\nOrder says: ${cleanText(l.text)}`;
   const box = head ? `<input type="checkbox" class="npack" data-pack="${key}" data-oid="${o.id}" data-from="${pull ? "shelf" : "print"}" ${l.packed ? "checked" : ""} ${packable && !busy ? "" : "disabled"} aria-label="Packed: ${esc(cleanText(l.text))}">`
     : `<span class="bvbox" data-tip="${l.packed ? "Packed" : packable ? "Mark packed" : "Can't pack yet"}"><input type="checkbox" class="npack" data-pack="${key}" data-oid="${o.id}" data-from="${pull ? "shelf" : "print"}" ${l.packed ? "checked" : ""} ${packable && !busy ? "" : "disabled"} aria-label="Packed: ${esc(cleanText(l.text))}"></span>`;
@@ -534,11 +534,13 @@ function productColors(p) {
   const any = s1.size || s2.size || p.picks_color;
   return { any, s1: [...s1], s2: [...s2], two: s2.size > 0 || /floor|insert/i.test(p.category || "") && s1.size > 0 };
 }
-const defaultSize = (p, want) => { const codes = (p.size_codes || []).map((s) => s.code); if (want && codes.includes(want)) return want; return codes[0] || "standard"; };
+// a product made in one size gets it; one made in several gets no size until a person picks one (the form never chooses)
+const defaultSize = (p, want) => { const codes = (p.size_codes || []).map((s) => s.code); if (want && codes.includes(want)) return want; return codes.length === 1 ? codes[0] : codes.length ? "" : "standard"; };
 // pick line -> what the catalog says (mirrors hq.pick_variant; the server has the last word on save)
 export function pickState(l) {
   const p = cat.byProduct.get(l.product_id); if (!p) return { status: "unresolved", reason: "no product" };
-  const size = l.size_code || defaultSize(p); if (!(p.size_codes || []).some((s) => s.code === size)) return { status: "unresolved", reason: "size not offered", size };
+  const size = l.size_code || defaultSize(p); if (!size) return { status: "unresolved", reason: "needs size" };
+  if (!(p.size_codes || []).some((s) => s.code === size)) return { status: "unresolved", reason: "size not offered", size };
   const c1 = l.c1 || "", c2 = l.c2 && l.c2 !== c1 ? l.c2 : ""; const opt = l.option_code || "standard"; let scheme;
   const pc = productColors(p);
   if (c1) scheme = schemeFor(c1, c2);
@@ -556,16 +558,29 @@ export function pickState(l) {
   const prefix = (cat.variants.find((x) => x.product_id === p.id && x.name && x.name.includes(" (")) || {}).name; const base = prefix ? prefix.split(" (")[0] : (cat.variants.find((x) => x.product_id === p.id) || {}).name || p.name;
   return { status: "creatable", name: base + (parts.length ? ` (${parts.join(", ")})` : ""), size, scheme };
 }
+// the order's words against the pick (mirrors hq.line_check; the server has the last word on save): "Text says Large", "Text says Hot Pink", or ""
+function textCheck(said, l, p) {
+  if (!said || !p) return "";
+  const key = "-" + said.toLowerCase().replace(/\(matte\)/g, " matte").replace(/[^a-z0-9]+/g, "-") + "-";
+  let sz = /-(large|lg)-/.test(key) ? "large" : /-(small|sm|standard|regular|reg)-/.test(key) ? "small" : isCustom(said) ? "custom" : "";
+  if (l.size_code === "custom" && isCustom(said)) sz = ""; if (p.id === "enclosure" && sz === "custom") sz = "";
+  if (sz && l.size_code && sz !== l.size_code && !(sz === "small" && l.size_code === "standard")) return "Text says " + (sz === "custom" ? "custom size" : sz[0].toUpperCase() + sz.slice(1));
+  if (!productColors(p).any) return "";
+  let k = key; const bad = [];
+  const names = [...cat.colors.values()].flatMap((c) => [c.name, ...(c.aliases || [])].map((nm) => [c, "-" + nm.toLowerCase().replace(/[^a-z0-9]+/g, "-") + "-"])).sort((a, b) => b[1].length - a[1].length);
+  for (const [c, ck] of names) if (k.includes(ck)) { k = k.split(ck).join("-"); if (c.id !== l.c1 && c.id !== l.c2 && !bad.includes(c)) bad.push(c); }
+  return bad.length ? "Text says " + bad.map((c) => c.name).join(" + ") : "";
+}
 const pickWord = (st) => {
   if (!st) return "";
   if (st.status === "variant") return ""; if (st.status === "creatable") return "New in the catalog on save";
-  switch (st.reason) { case "needs color": return "Needs a color"; case "color not offered": return "Not offered in that color — add it in Inventory"; case "size not offered": return `Not made in ${st.size}`; case "option not offered": return `No ${st.option} version`; default: return "Not in the catalog"; }
+  switch (st.reason) { case "needs size": return "Needs a size"; case "needs color": return "Needs a color"; case "color not offered": return "Not offered in that color — add it in Inventory"; case "size not offered": return `Not made in ${st.size}`; case "option not offered": return `No ${st.option} version`; default: return "Not in the catalog"; }
 };
 // a saved order line -> form line (pick when the catalog knows the item, else text)
 function lineFromSaved(l) {
   const v = (l.notion_inventory_id && cat.varByNotion.get(l.notion_inventory_id)) || (l.variant_id != null && cat.varById.get(String(l.variant_id))) || null;
   const base = { uid: l.uid, qty: Number(l.qty) || 1, note: l.note || "", tag: l.tag || "", group_uid: l.group_uid || null, print_state: l.print_state, packed: l.packed, size_1: l.size_1 ?? "", size_2: l.size_2 ?? "", size_3: l.size_3 ?? "", size_unit: l.size_unit || "in", size_basis: l.size_basis || "piece" };
-  if (v) { const c = schemeColors(v.color_scheme_id); return { ...base, kind: "pick", product_id: v.product_id, size_code: v.size_code, c1: c.c1, c2: c.c2, option_code: v.option_code || "standard", untracked: false }; }
+  if (v) { const c = schemeColors(v.color_scheme_id); return { ...base, kind: "pick", product_id: v.product_id, size_code: v.size_code, c1: c.c1, c2: c.c2, option_code: v.option_code || "standard", untracked: false, said: normName(cleanText(l.text)) === normName(v.name) ? "" : cleanText(l.text) }; }
   return { ...base, kind: "text", text: cleanText(l.text), inv: l.notion_inventory_id || "", untracked: l.match === "untracked" };
 }
 const pickLine = (product_id, extra = {}) => { const p = cat.byProduct.get(product_id); const d = p && p.default_scheme ? schemeColors(p.default_scheme) : { c1: "", c2: "" }; return { kind: "pick", product_id, size_code: p ? defaultSize(p, extra.size_code) : "standard", c1: d.c1, c2: d.c2, option_code: "standard", qty: 1, note: "", tag: "", untracked: false, ...extra }; };
@@ -620,13 +635,14 @@ function lineRowHtml(l, i) {
   if (l.kind === "pick") {
     const p = cat.byProduct.get(l.product_id); const st = pickState(l); const pc = p ? productColors(p) : { any: false, s1: [], s2: [] };
     const sizes = p ? p.size_codes || [] : [];
-    const sizeSel = sizes.length > 1 ? `<select data-l="${i}" data-lf="size_code" aria-label="Size">${sizes.map((s) => `<option value="${esc(s.code)}" ${s.code === l.size_code ? "selected" : ""}>${esc(s.name)}</option>`).join("")}</select>` : `<span class="na">One size</span>`;
+    const sizeSel = sizes.length > 1 ? `<select data-l="${i}" data-lf="size_code" aria-label="Size">${l.size_code ? "" : `<option value="" selected>—</option>`}${sizes.map((s) => `<option value="${esc(s.code)}" ${s.code === l.size_code ? "selected" : ""}>${esc(s.name)}</option>`).join("")}</select>` : `<span class="na">One size</span>`;
     const opt = (ids, cur) => `<option value="">—</option>${ids.map((id) => `<option value="${esc(id)}" ${id === cur ? "selected" : ""}>${esc(colorName(id))}</option>`).join("")}`;
     const others = (ids, cur) => { const rest = [...cat.colors.values()].filter((c) => !ids.includes(c.id)); return rest.length ? `<optgroup label="Other colors">${rest.map((c) => `<option value="${esc(c.id)}" ${c.id === cur ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</optgroup>` : ""; };
     const colorSel = !pc.any ? `<span class="na">One color</span>` : `<div class="colorpair"><select data-l="${i}" data-lf="c1" aria-label="Color 1">${opt(pc.s1, l.c1)}${others(pc.s1, l.c1)}</select>${pc.two ? `<select data-l="${i}" data-lf="c2" aria-label="Color 2">${opt(pc.s2, l.c2)}${others(pc.s2, l.c2)}</select>` : ""}</div>`;
     const word = pickWord(st); const ok = st.status === "variant" || st.status === "creatable";
-    const small = [p && p.collections && p.collections.length ? esc((cat.colls.get(p.collections[0]) || {}).name || "") : "", esc(stockOf(st)), l.option_code && l.option_code !== "standard" ? esc(l.option_code) : "", l.src ? esc({ collection: "from collection", addon: "add-on", repeat: "from a past order", paste: "pasted" }[l.src] || "") : ""].filter(Boolean).join(" · ");
-    return `<div class="line pick${l.tag ? " t-" + l.tag : ""}" data-k="${i}" ${l.uid ? `data-uid="${l.uid}"` : ""}><div class="nm"><span class="pname"><span class="ta"><input class="li-prod" data-pl="${i}" value="${esc(p ? p.name : l.product_id)}" data-was="${esc(p ? p.name : l.product_id)}" autocomplete="off" aria-label="Item ${i + 1}"><span class="ta-list" hidden></span></span>${tagBtns(i, l)}</span><small>${small}${state}${packed}</small>${word ? `<span class="flag${ok ? " ok" : ""}">${esc(word)}</span>${st.reason === "color not offered" ? `<button type="button" class="btn ghost mini" data-addcat="${i}">Add to catalog</button>` : ""}` : ""}</div>
+    const says = l.said ? textCheck(l.said, l, p) : "";
+    const small = [says ? `“${esc(l.said)}”` : "", p && p.collections && p.collections.length ? esc((cat.colls.get(p.collections[0]) || {}).name || "") : "", esc(stockOf(st)), l.option_code && l.option_code !== "standard" ? esc(l.option_code) : "", l.src ? esc({ collection: "from collection", addon: "add-on", repeat: "from a past order", paste: "pasted" }[l.src] || "") : ""].filter(Boolean).join(" · ");
+    return `<div class="line pick${l.tag ? " t-" + l.tag : ""}" data-k="${i}" ${l.uid ? `data-uid="${l.uid}"` : ""}><div class="nm"><span class="pname"><span class="ta"><input class="li-prod" data-pl="${i}" value="${esc(p ? p.name : l.product_id)}" data-was="${esc(p ? p.name : l.product_id)}" autocomplete="off" aria-label="Item ${i + 1}"><span class="ta-list" hidden></span></span>${tagBtns(i, l)}</span><small>${small}${state}${packed}</small>${word ? `<span class="flag${ok ? " ok" : ""}">${esc(word)}</span>${st.reason === "color not offered" ? `<button type="button" class="btn ghost mini" data-addcat="${i}">Add to catalog</button>` : ""}` : ""}${says ? `<span class="row" style="justify-content:flex-start;gap:6px"><span class="flag">${esc(says)}</span><button type="button" class="btn ghost mini" data-keeppick="${i}" title="The pick is right; the order's words move to the line note">Keep pick</button></span>` : ""}</div>
       <input type="number" min="1" max="99" value="${q}" data-l="${i}" data-lf="qty" aria-label="Quantity">
       <div class="szc">${sizeSel}</div><div class="clc">${colorSel}</div><div class="ntc">${noteIn}</div>${del}${l.size_code === "custom" ? sizeRow(l, i, p) : ""}</div>`;
   }
@@ -739,10 +755,10 @@ function pasteHtml() {
 // a resolve_lines verdict -> form line
 function lineFromResolved(text, qty, x) {
   const dims = x && x.dims ? { size_1: x.dims.size_1 ?? "", size_2: x.dims.size_2 ?? "", size_3: x.dims.size_3 ?? "", size_unit: x.dims.size_unit || "in", size_basis: x.dims.size_basis || "piece" } : {};
-  if (x && x.status === "variant" && cat.varById.get(String(x.variant_id))) { const v = cat.varById.get(String(x.variant_id)); const c = schemeColors(v.color_scheme_id); return { kind: "pick", product_id: v.product_id, size_code: v.size_code, c1: c.c1, c2: c.c2, option_code: v.option_code || "standard", qty, note: "", untracked: false, src: "paste", ...dims }; }
+  if (x && x.status === "variant" && cat.varById.get(String(x.variant_id))) { const v = cat.varById.get(String(x.variant_id)); const c = schemeColors(v.color_scheme_id); return { kind: "pick", product_id: v.product_id, size_code: v.size_code, c1: c.c1, c2: c.c2, option_code: v.option_code || "standard", qty, note: "", untracked: false, src: "paste", said: text, ...dims }; }
   if (x && x.product_id && cat.byProduct.get(x.product_id)) { const a = x.add || {}; const byName = (nm) => { const k = normName(nm); const c = nm && [...cat.colors.values()].find((c) => normName(c.name) === k || (c.aliases || []).some((al) => normName(al) === k)); return c ? c.id : ""; };
     const c = x.color_scheme_id && cat.schemes.get(x.color_scheme_id) ? schemeColors(x.color_scheme_id) : { c1: byName(a.color_1), c2: byName(a.color_2) };
-    return { ...pickLine(x.product_id, { size_code: x.size_code }), c1: c.c1, c2: c.c2, qty, src: "paste", ...dims }; }
+    return { ...pickLine(x.product_id, { size_code: x.size_code }), c1: c.c1, c2: c.c2, qty, src: "paste", said: text, ...dims }; }
   return { kind: "text", text, qty, note: "", untracked: !!(x && x.status === "untracked") || (/\bplants?\b|cocoon|substrate|moss/i.test(text) && !(x && x.status === "variant")), src: "paste" };
 }
 async function reviewPaste(text) {
@@ -793,11 +809,11 @@ function wireForm(host, custs) {
   const addLine = (line) => { read(); f.lines.push(line); formRender(); setTimeout(() => { const el = $("#odHost #addItem"); if (el) el.focus(); }, 30); };
   ta(addIn, addIn.closest(".ta").querySelector(".ta-list"), prodHits, (h) => addLine(pickLine(h.p.id, { size_code: encSize(f) || undefined })));
   addIn.addEventListener("keydown", (e) => { if (e.key === "Enter" && addIn.value.trim() && (addIn.closest(".ta").querySelector(".ta-list").hidden)) { e.preventDefault(); const hits = searchProducts(addIn.value); if (hits.length === 1) addLine(pickLine(hits[0].p.id, { size_code: encSize(f) || undefined })); else addLine({ kind: "text", text: addIn.value.trim(), qty: 1, note: "", untracked: false }); } });
-  host.querySelectorAll(".li-text").forEach((inp) => ta(inp, inp.closest(".ta").querySelector(".ta-list"), prodHits, (h) => { read(); const i = +inp.dataset.l; const old = f.lines[i]; f.lines[i] = { ...pickLine(h.p.id, { size_code: encSize(f) || undefined }), uid: old.uid, qty: old.qty, note: old.note, group_uid: old.group_uid, print_state: old.print_state, packed: old.packed }; formRender(); }));
+  host.querySelectorAll(".li-text").forEach((inp) => ta(inp, inp.closest(".ta").querySelector(".ta-list"), prodHits, (h) => { read(); const i = +inp.dataset.l; const old = f.lines[i]; f.lines[i] = { ...pickLine(h.p.id, { size_code: encSize(f) || undefined }), uid: old.uid, qty: old.qty, note: old.note, group_uid: old.group_uid, print_state: old.print_state, packed: old.packed, said: cleanText(old.text) }; formRender(); }));
   // change a catalog line's item in place: keeps qty, notes, tag and its place; the old piece's print/pack status doesn't carry over (save_order resets it)
   host.querySelectorAll(".li-prod").forEach((inp) => { ta(inp, inp.closest(".ta").querySelector(".ta-list"), prodHits, (h) => { read(); const i = +inp.dataset.pl; const old = f.lines[i]; if (!old || h.p.id === old.product_id) { formRender(); return; }
     const keep = (h.p.size_codes || []).some((s) => s.code === old.size_code) ? old.size_code : encSize(f) || undefined;
-    f.lines[i] = { ...pickLine(h.p.id, { size_code: keep }), uid: old.uid, qty: old.qty, note: old.note, tag: old.tag, group_uid: old.group_uid, src: old.src }; formRender(); });
+    f.lines[i] = { ...pickLine(h.p.id, { size_code: keep }), uid: old.uid, qty: old.qty, note: old.note, tag: old.tag, group_uid: old.group_uid, src: old.src, said: old.said || "" }; formRender(); });
     inp.addEventListener("blur", () => setTimeout(() => { if (document.activeElement !== inp) inp.value = inp.dataset.was; }, 150)); });
   host.onchange = async (e) => { const t = e.target;
     if (t.matches("[data-f='collection']")) { const prev = f.collection; read(); const next = f.collection; f.collection = prev;
@@ -815,11 +831,12 @@ function wireForm(host, custs) {
       if (f.lines.length && !(await confirmBox({ title: "Replace the items?", body: "The past order's items replace what's listed now.", ok: "Replace" }))) return; f.lines = lines; formRender(); return; }
     if ((b = t.closest("[data-tag]"))) { read(); const l = f.lines[+b.dataset.l]; if (l) l.tag = l.tag === b.dataset.tag ? "" : b.dataset.tag; formRender(); return; }
     if ((b = t.closest("[data-del]"))) { read(); f.lines.splice(+b.dataset.del, 1); formRender(); return; }
+    if ((b = t.closest("[data-keeppick]"))) { read(); const l = f.lines[+b.dataset.keeppick]; if (l && l.said) { l.note = [l.note, "Order said: " + l.said].map((x) => String(x || "").trim()).filter(Boolean).join(" · "); l.said = ""; } formRender(); return; }
     if ((b = t.closest("[data-tonotes]"))) { read(); const l = f.lines[+b.dataset.tonotes]; const txt = [cleanText(l.text), l.note].map((x) => String(x || "").trim()).filter(Boolean).join(" — "); f.summary = [f.summary.trim(), txt].filter(Boolean).join("\n"); f.lines.splice(+b.dataset.tonotes, 1); formRender(); return; }
     if ((b = t.closest("[data-addcat]"))) { read(); const i = +b.dataset.addcat; const l = f.lines[i]; if (!l) return;
       const p = l.kind === "pick" ? cat.byProduct.get(l.product_id) : null; const x = l.kind === "text" ? RES.get(l.text.trim()) || {} : {}; const a = x.add || {};
       const pre = l.kind === "pick" ? { text: p ? p.name : "", product: p ? p.name : "", size: p ? sizeName(p, l.size_code) : "", color_1: colorName(l.c1), color_2: colorName(l.c2) } : { text: l.text, product: a.product || "", size: a.size || "", color_1: a.color_1 || "", color_2: a.color_2 || "" };
-      import("./inventory.js").then(({ addToCatalog }) => addToCatalog(pre, async (id) => { if (F.form !== f) return; await loadCatalog(true); const ln = f.lines[i]; const v = cat.varByNotion.get(id); if (ln && v) { const c = schemeColors(v.color_scheme_id); f.lines[i] = { ...ln, kind: "pick", product_id: v.product_id, size_code: v.size_code, c1: c.c1, c2: c.c2, option_code: v.option_code || "standard", untracked: false }; delete f.lines[i].text; } if (ln && ln.kind === "text") RES.delete(ln.text.trim()); formRender(); })); return; }
+      import("./inventory.js").then(({ addToCatalog }) => addToCatalog(pre, async (id) => { if (F.form !== f) return; await loadCatalog(true); const ln = f.lines[i]; const v = cat.varByNotion.get(id); if (ln && v) { const c = schemeColors(v.color_scheme_id); f.lines[i] = { ...ln, kind: "pick", product_id: v.product_id, size_code: v.size_code, c1: c.c1, c2: c.c2, option_code: v.option_code || "standard", untracked: false, said: ln.kind === "text" ? cleanText(ln.text) : ln.said || "" }; delete f.lines[i].text; } if (ln && ln.kind === "text") RES.delete(ln.text.trim()); formRender(); })); return; }
     if ((b = t.closest("[data-rdel]"))) { F.review.lines.splice(+b.dataset.rdel, 1); formRender(); return; }
     const act = (t.closest("[data-act]") || {}).dataset?.act; if (!act) return;
     if (act === "clearItems") { read(); f.lines = []; formRender(); }
@@ -832,7 +849,7 @@ function wireForm(host, custs) {
 }
 function validate(f) {
   const errs = []; if (!f.customer.trim()) errs.push("Add the customer's name"); if (!f.platform.length) errs.push("Pick the platform the order came from"); if (!f.ship_by) errs.push("Pick a ship-by date"); if (!f.lines.length) errs.push("Add at least one item");
-  f.lines.forEach((l, i) => { if (l.kind === "text" && !String(l.text).trim()) errs.push(`Line ${i + 1} has no text`); if (l.kind === "pick" && l.size_code === "custom" && !(Number(l.size_1) > 0)) errs.push(`Line ${i + 1}: custom size needs its measurements`); });
+  f.lines.forEach((l, i) => { if (l.kind === "text" && !String(l.text).trim()) errs.push(`Line ${i + 1} has no text`); if (l.kind === "pick" && l.size_code === "custom" && !(Number(l.size_1) > 0)) errs.push(`Line ${i + 1}: custom size needs its measurements`); if (l.kind === "pick" && !l.size_code && ((cat.byProduct.get(l.product_id) || {}).size_codes || []).length > 1) errs.push(`Line ${i + 1}: pick a size`); });
   return errs;
 }
 // form lines -> save_order lines. Catalog picks carry a variant id; a pick the catalog doesn't have yet is made first (hq.pick_variant make).
@@ -843,8 +860,9 @@ async function linesForSave(ff, make = true) {
     if (l.kind === "pick") {
       let st = pickState(l);
       if (st.status === "creatable" && make) { const r = await db.pickVariant({ product_id: l.product_id, size_code: st.size, color_1: l.c1 || null, color_2: l.c2 || null, option_code: l.option_code || "standard", make: true }); if (r && r.status === "variant") { st = { status: "variant", name: r.name, v: { id: r.variant_id } }; invalidateCatalog(); } else throw new Error(`${(cat.byProduct.get(l.product_id) || {}).name || l.product_id}: ${pickWord({ status: "unresolved", ...(r || {}) }) || (r && r.error) || "couldn't be added to the catalog"}`); }
-      if (st.status === "variant") { o.text = st.name; o.variant_id = st.v.id; }
-      else { const p = cat.byProduct.get(l.product_id) || { name: l.product_id }; const parts = [l.size_code && l.size_code !== "standard" ? sizeName(p, l.size_code) : "", [colorName(l.c1), colorName(l.c2)].filter(Boolean).join(" + ")].filter(Boolean); o.text = p.name + (parts.length ? ` (${parts.join(", ")})` : ""); }
+      // the line's text is what the order said; the catalog name only when the line never had words (the server checks the pick against the words)
+      if (st.status === "variant") { o.text = l.said || st.name; o.variant_id = st.v.id; }
+      else { const p = cat.byProduct.get(l.product_id) || { name: l.product_id }; const parts = [l.size_code && l.size_code !== "standard" ? sizeName(p, l.size_code) : "", [colorName(l.c1), colorName(l.c2)].filter(Boolean).join(" + ")].filter(Boolean); o.text = l.said || p.name + (parts.length ? ` (${parts.join(", ")})` : ""); }
       const cz = l.size_code === "custom"; o.size_1 = cz && l.size_1 !== "" ? Number(l.size_1) : null; o.size_2 = cz && l.size_2 !== "" ? Number(l.size_2) : null; o.size_3 = cz && l.size_3 !== "" ? Number(l.size_3) : null; o.size_unit = cz ? l.size_unit || "in" : "in"; o.size_basis = cz ? l.size_basis || "piece" : "piece";
     } else { o.text = String(l.text).trim(); if (l.inv) o.notion_inventory_id = l.inv; if (l.untracked && !l.inv) o.untracked = true; }
     out.push(o);
