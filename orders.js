@@ -501,7 +501,7 @@ export function customers() {
   for (const o of store.orders) {
     const k = normName(o.customer); if (!k) continue;
     let c = map.get(k); if (!c) { c = { key: k, name: o.customer.replace(/\s*\*+\s*$/, ""), orders: [], platforms: new Set(), states: new Set(), handles: new Set(), repeat: false }; map.set(k, c); }
-    c.orders.push(o); (o.platform || []).forEach((p) => c.platforms.add(p)); if (o.state) c.states.add(o.state); if (o.handle) c.handles.add(o.handle); if (o.repeat_customer || /\*\s*$/.test(o.customer)) c.repeat = true;
+    c.orders.push(o); (o.platform || []).forEach((p) => c.platforms.add(p)); if (o.state) c.states.add(o.state); if (o.handle) c.handles.add(o.handle); if (o.repeat_customer) c.repeat = true;
   }
   for (const c of map.values()) { c.orders.sort((a, b) => String(b.order_date || b.created_at).localeCompare(String(a.order_date || a.created_at))); c.last = c.orders[0]; c.open = c.orders.filter((o) => o.status !== "Done").length; }
   return [...map.values()].sort((a, b) => String(b.last.order_date || b.last.created_at).localeCompare(String(a.last.order_date || a.last.created_at)));
@@ -527,7 +527,7 @@ export function custRender() {
   host.onclick = (e) => {
     let b;
     if ((b = e.target.closest("[data-custopen]"))) { CUST.open = b.dataset.custopen || null; custRender(); return; }
-    if ((b = e.target.closest("[data-custnew]"))) { const c = all.find((x) => x.key === b.dataset.custnew); if (!c) return; document.querySelector('nav.tabs [data-tab="bins"]').click(); openOrderForm(null, null, { customer: c.name, platform: c.last.platform || [], state: [...c.states][0] || "", handle: [...c.handles][0] || "", repeat_customer: true }); }
+    if ((b = e.target.closest("[data-custnew]"))) { const c = all.find((x) => x.key === b.dataset.custnew); if (!c) return; document.querySelector('nav.tabs [data-tab="bins"]').click(); openOrderForm(null, null, { customer: c.name, platform: c.last.platform || [], state: [...c.states][0] || "", handle: [...c.handles][0] || "" }); }
   };
 }
 
@@ -610,11 +610,11 @@ const isEncLine = (l) => (l.kind === "pick" ? l.product_id === "enclosure" : isE
 /* ===================== order form (new / edit) ===================== */
 const PLATFORMS = () => [...new Set(["Etsy", "Shopify", "TikTok", "TikTok - LIVE", "In person", ...store.orders.flatMap((o) => o.platform || [])])];
 const F = { form: null, orig: null, errors: [], review: null, busy: false, focus: null, custOpen: false };
-const blank = (pre = {}) => ({ id: null, version: null, customer: "", repeat_customer: false, handle: "", platform: [], order_number: "", shipping_number: "", order_date: isoDay(), ship_by: "", ship_type: "Standard", status: "Not started", important: "", summary: "", state: "", collection: "", choices: {}, lines: [], ...pre });
+const blank = (pre = {}) => ({ id: null, version: null, customer: "", handle: "", platform: [], order_number: "", shipping_number: "", order_date: isoDay(), ship_by: "", ship_type: "Standard", status: "Not started", important: "", summary: "", state: "", collection: "", choices: {}, lines: [], ...pre });
 const fromOrder = (o) => {
   const lines = [...(o.lines || [])].sort((a, b) => a.line_no - b.line_no).map(lineFromSaved);
   const coll = (o.collections || []).map((n) => [...cat.colls.values()].find((c) => c.name === n || c.id === n)).filter(Boolean)[0];
-  return { id: o.id, version: o.version, customer: o.customer || "", repeat_customer: !!o.repeat_customer, handle: o.handle || "", platform: [...(o.platform || [])], order_number: o.order_number || "", shipping_number: o.shipping_number || "", order_date: o.order_date || "", ship_by: o.ship_by || "", ship_type: o.ship_type || "Standard", status: o.status, important: o.important || "", summary: o.summary || "", state: o.state || "", collection: coll ? coll.id : "", choices: {}, lines };
+  return { id: o.id, version: o.version, customer: o.customer || "", handle: o.handle || "", platform: [...(o.platform || [])], order_number: o.order_number || "", shipping_number: o.shipping_number || "", order_date: o.order_date || "", ship_by: o.ship_by || "", ship_type: o.ship_type || "Standard", status: o.status, important: o.important || "", summary: o.summary || "", state: o.state || "", collection: coll ? coll.id : "", choices: {}, lines };
 };
 const snap = (f) => JSON.stringify(f);
 const encSize = (f) => { const e = f.lines.find((l) => l.kind === "pick" && l.product_id === "enclosure"); return e ? e.size_code : ""; };
@@ -751,7 +751,6 @@ function formDraw(f, host) {
       <label class="f">Order date<input type="date" data-f="order_date" value="${esc(f.order_date)}"></label>
       <label class="f">Shipping<select data-f="ship_type"><option ${f.ship_type === "Standard" ? "selected" : ""}>Standard</option><option ${f.ship_type === "Express" ? "selected" : ""}>Express</option></select></label>
       <label class="f">Shipping # <span class="opt">(optional)</span><input data-f="shipping_number" value="${esc(f.shipping_number)}" autocomplete="off"></label>
-      <label class="utk" style="align-self:end;padding-bottom:12px"><input type="checkbox" data-f="repeat_customer" ${f.repeat_customer ? "checked" : ""}> Repeat customer</label>
     </div>
     <div class="grid2">
       <label class="f">Important <span class="opt">(red banner on the card)</span><input data-f="important" value="${esc(f.important)}" autocomplete="off"></label>
@@ -832,7 +831,7 @@ function wireForm(host, custs) {
     input.addEventListener("blur", () => setTimeout(() => { list.hidden = true; }, 120));
   };
   const cIn = host.querySelector("#fCustomer");
-  if (cIn) { ta(cIn, cIn.closest(".ta").querySelector(".ta-list"), (q) => { const n = normName(q); if (custs.some((c) => c.key === n)) return []; return custs.filter((c) => normName([c.name, ...c.handles].join(" ")).includes(n)).slice(0, 8).map((c) => ({ c, html: `<span><b>${esc(c.name)}</b>${c.handles.size ? ` <span class="sub">${esc([...c.handles].join(", "))}</span>` : ""}</span><span class="sub">${plural(c.orders.length, "order")}${c.states.size ? " · " + esc([...c.states][0]) : ""}</span>` })); }, (h) => { read(); f.customer = h.c.name; f.repeat_customer = true; if (!f.platform.length && h.c.last.platform) f.platform = [...h.c.last.platform]; if (!f.state) f.state = [...h.c.states][0] || ""; if (!f.handle) f.handle = [...h.c.handles][0] || ""; formRender(); });
+  if (cIn) { ta(cIn, cIn.closest(".ta").querySelector(".ta-list"), (q) => { const n = normName(q); if (custs.some((c) => c.key === n)) return []; return custs.filter((c) => normName([c.name, ...c.handles].join(" ")).includes(n)).slice(0, 8).map((c) => ({ c, html: `<span><b>${esc(c.name)}</b>${c.handles.size ? ` <span class="sub">${esc([...c.handles].join(", "))}</span>` : ""}</span><span class="sub">${plural(c.orders.length, "order")}${c.states.size ? " · " + esc([...c.states][0]) : ""}</span>` })); }, (h) => { read(); f.customer = h.c.name; if (!f.platform.length && h.c.last.platform) f.platform = [...h.c.last.platform]; if (!f.state) f.state = [...h.c.states][0] || ""; if (!f.handle) f.handle = [...h.c.handles][0] || ""; formRender(); });
     cIn.addEventListener("input", () => { f.customer = cIn.value; const c = host.querySelector("#odCust"); if (c) c.innerHTML = custCard(f, custs); }); }
   const prodHits = (q) => searchProducts(q).map((h) => ({ p: h.p, html: `<span>${esc(h.p.name)}</span><span class="sub">${esc(h.p.category || "")}${h.p.collections && h.p.collections.length ? " · " + esc(h.p.collections.map((id) => (cat.colls.get(id) || {}).name || id).join(", ")) : ""}</span>` }));
   const addIn = host.querySelector("#addItem");
@@ -903,14 +902,14 @@ async function linesForSave(ff, make = true) {
 async function saveForm() {
   const f = F.form; F.errors = validate(f); if (F.errors.length) { formRender(); return; }
   F.busy = true; formRender();
-  const fields = ["customer", "repeat_customer", "handle", "platform", "order_number", "shipping_number", "order_date", "ship_by", "ship_type", "important", "summary", "state"];
+  const fields = ["customer", "handle", "platform", "order_number", "shipping_number", "order_date", "ship_by", "ship_type", "important", "summary", "state"];
   const orig = JSON.parse(F.orig);
   const collName = f.collection && cat.colls.get(f.collection) ? [cat.colls.get(f.collection).name] : [];
   try {
     const lines = await linesForSave(f);
     const collections = [...new Set([...collName, ...lines.map((l) => { const v = l.variant_id != null && cat.varById.get(String(l.variant_id)); const p = v && cat.byProduct.get(v.product_id); return p && p.collections && p.collections.length ? (cat.colls.get(p.collections[0]) || {}).name : null; }).filter(Boolean)])];
     if (!f.id) {
-      const p = { customer: f.customer.trim(), repeat_customer: !!f.repeat_customer, handle: f.handle.trim() || null, platform: f.platform, order_number: f.order_number.trim() || null, shipping_number: f.shipping_number.trim() || null, order_date: f.order_date || null, ship_by: f.ship_by, ship_type: f.ship_type, status: "Not started", notes: lines.map((l) => l.text).join("\n"), important: f.important.trim() || null, summary: f.summary.trim() || null, freebie: [], items: [], collections, order_type: [], state: f.state.trim().toUpperCase() || null, lines };
+      const p = { customer: f.customer.trim(), handle: f.handle.trim() || null, platform: f.platform, order_number: f.order_number.trim() || null, shipping_number: f.shipping_number.trim() || null, order_date: f.order_date || null, ship_by: f.ship_by, ship_type: f.ship_type, status: "Not started", notes: lines.map((l) => l.text).join("\n"), important: f.important.trim() || null, summary: f.summary.trim() || null, freebie: [], items: [], collections, order_type: [], state: f.state.trim().toUpperCase() || null, lines };
       p.freebie = lines.filter((l) => l.tag === "gift").map((l) => l.text);
       const r = await db.saveOrder(p); F.busy = false;
       // entered from a sale: link the sale to the new order (the order then carries the Review flag until confirmed)
