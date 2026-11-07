@@ -1,7 +1,7 @@
 // Print Plan: assign pieces to printers, commit, run batches, finalize. Line states save to order_lines (set_line_state);
 // the queue layout and settings save to app_state key printplan2/main (set_app_state).
 import * as db from "./supabase.js";
-import { $, esc, plural, isoDay, addDays, NO_DATE, store, onChange, load, alloc, owed, free, lineKind, lineSpec, isCustom, shipBy, isExpress, rank, sizeLabel, toast, confirmBox, reloadOrder, reloadInventory, cleanText, setErr, fmtSize } from "./orders.js";
+import { $, esc, plural, isoDay, addDays, NO_DATE, store, onChange, load, alloc, owed, free, lineKind, lineSpec, isCustom, shipBy, isExpress, rank, sizeLabel, toast, confirmBox, reloadOrder, reloadInventory, cleanText, setErr, fmtSize, cardHtml, modal, openOrderForm } from "./orders.js";
 
 const KEY = "printplan2/main";
 const PRINTERS = [1, 2, 3, 4, 5, 6];
@@ -287,6 +287,16 @@ const printerOptions = (selected, { blank = "Not assigned", exclude } = {}) => `
 const pickAttrs = (printer) => (printer ? `class="set" style="--pc:${printerColor(printer)}"` : "");
 const pieceLabel = (spec) => `${esc(spec.name)}${spec.size ? " · " + esc(sizeLabel(spec.size)) : ""}${spec.color ? ` <span class="sub">${esc(spec.color)}</span>` : ""}`;
 const stockTag = '<span class="stk">stock</span> ';
+// a piece that belongs to an order opens that order's Bin View card
+const orderBtn = (pid, inner) => (pid ? `<button type="button" class="pqo" data-act="showOrder" data-piece="${esc(pid)}">${inner}</button>` : inner);
+async function showOrder(pid) {
+  const uid = String(pid || "").split("#")[0]; const find = () => store.orders.find((o) => (o.lines || []).some((l) => l.uid === uid));
+  let o = find(); if (!o) { await load({ done: true }); o = find(); }
+  if (!o) { toast("That order wasn't found", true); return; }
+  const m = modal(`<div class="pqorder"><div class="sub pqship">${esc(shipLabel(shipBy(o)).text.replace(/^./, (c) => c.toUpperCase()))}</div>${cardHtml(o)}</div><div class="row"><button type="button" class="btn ghost" data-close>Close</button></div>`, { label: "Order · " + o.customer });
+  m.el.querySelector(`[data-line="${CSS.escape(uid)}"]`)?.classList.add("pqhit");
+  m.el.addEventListener("click", (e) => { if (e.target.closest("[data-close]")) m.close(); else if (e.target.closest("[data-obedit]")) { m.close(); document.querySelector('nav.tabs [data-tab="bins"]')?.click(); openOrderForm(o); } });
+}
 const qTokens = () => String(ui.q || "").toLowerCase().split(/\s+/).filter(Boolean);
 const pieceHay = (p) => { const o = ORDER_BY_ID.get(p.orderId) || {}; return [p.name, p.size, sizeLabel(p.size), p.color, o.customer, o.platform].join(" ").toLowerCase(); };
 const matchesQ = (hay, t = qTokens()) => t.every((x) => hay.includes(x));
@@ -370,11 +380,11 @@ function viewReview(b) {
     const opts = [...(it.pieceId && PIECE_BY_ID.has(it.pieceId) ? [["piece:" + it.pieceId, `Its order: ${customerOf(it.pieceId)}`]] : []), ...alternatives.map((p) => { const o = ORDER_BY_ID.get(p.orderId); return ["piece:" + p.id, `${o.customer} · ${shipLabel(o.shipBy).text}`]; }), ["stock", "Add to stock"], ["fail", "Failed print"]];
     const here = locate(b.id)?.printer; const ro = it.reprintOn ?? String(here);
     const reprintSel = dest === "fail" ? `<select data-act="setReprint" data-batch="${b.id}" data-uid="${esc(it.uid)}" aria-label="Reprint ${esc(it.spec.name)}">${PRINTERS.map((p) => `<option value="${p}" ${String(p) === ro ? "selected" : ""}>Reprint on Printer ${p}${p === here ? " (this one)" : ""}</option>`).join("")}<option value="no" ${ro === "no" ? "selected" : ""}>Don't reprint</option></select>` : "";
-    return `<div class="rrow ${dest === "fail" ? "rfail" : dest === "stock" ? "rstock" : ""}"><span>${it.pieceId ? "" : stockTag}${pieceLabel(it.spec)}</span><span style="display:flex;gap:6px;flex-wrap:wrap"><select data-act="setDest" data-batch="${b.id}" data-uid="${esc(it.uid)}" aria-label="Where ${esc(it.spec.name)} goes">${opts.map(([v, l]) => `<option value="${esc(v)}" ${v === dest ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>${reprintSel}</span></div>`; }).join("")}</div>`;
+    return `<div class="rrow ${dest === "fail" ? "rfail" : dest === "stock" ? "rstock" : ""}"><span>${it.pieceId ? "" : stockTag}${orderBtn(it.pieceId, pieceLabel(it.spec))}</span><span style="display:flex;gap:6px;flex-wrap:wrap"><select data-act="setDest" data-batch="${b.id}" data-uid="${esc(it.uid)}" aria-label="Where ${esc(it.spec.name)} goes">${opts.map(([v, l]) => `<option value="${esc(v)}" ${v === dest ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>${reprintSel}</span></div>`; }).join("")}</div>`;
 }
-function viewDoneItems(b) { return `<div class="bitems">${b.items.map((it) => { const o = it.outcome || {}; const label = o.to === "piece" ? "→ " + esc(customerOf(o.pieceId) || "order") : o.to === "stock" ? "→ stock" : o.to === "fail" ? (o.reprint ? `failed · reprint on Printer ${o.reprint.printer}` : "failed") : ""; const pick = o.to === "fail" && !o.reprint ? `<select data-act="reprintItem" data-batch="${b.id}" data-uid="${esc(it.uid)}" aria-label="Reprint ${esc(it.spec.name)}">${printerOptions(null, { blank: "Reprint on…" })}</select>` : ""; return `<div class="bi"><span>${pieceLabel(it.spec)}</span><span class="fin fin-${o.to || "none"}">${label}</span>${pick}</div>`; }).join("")}</div>`; }
+function viewDoneItems(b) { return `<div class="bitems">${b.items.map((it) => { const o = it.outcome || {}; const label = o.to === "piece" ? "→ " + esc(customerOf(o.pieceId) || "order") : o.to === "stock" ? "→ stock" : o.to === "fail" ? (o.reprint ? `failed · reprint on Printer ${o.reprint.printer}` : "failed") : ""; const pick = o.to === "fail" && !o.reprint ? `<select data-act="reprintItem" data-batch="${b.id}" data-uid="${esc(it.uid)}" aria-label="Reprint ${esc(it.spec.name)}">${printerOptions(null, { blank: "Reprint on…" })}</select>` : ""; return `<div class="bi"><span>${orderBtn(o.to === "piece" ? o.pieceId : it.pieceId, pieceLabel(it.spec))}</span><span class="fin fin-${o.to || "none"}">${label}</span>${pick}</div>`; }).join("")}</div>`; }
 function binFlag(b, it) { const pc = it.pieceId && PIECE_BY_ID.get(it.pieceId); if (!pc) return it.pieceId ? ' <span class="binflag">order no longer open</span>' : ""; const mine = LINE_BY_UID.get(pc.line)?.l.print_src === "plan"; if (b.state === B.QUEUED && pc.bin === "printing" && !mine) return ' <span class="binflag">printing in Bin View</span>'; if (b.state === B.PRINTING && pc.bin === "print" && mine) return ' <span class="binflag">Bin View says needs printing</span>'; return ""; }
-function viewLiveItems(b) { return `<div class="bitems">${b.items.length ? "" : '<span class="sub">Empty. Add stock pieces below.</span>'}${b.items.map((it) => `<div class="bi"><span>${it.pieceId ? "" : stockTag}${pieceLabel(it.spec)}${it.pieceId ? ` <span class="sub">· ${esc(customerOf(it.pieceId))}</span>` : ""}${binFlag(b, it)}</span><span><button type="button" data-act="dupItem" data-batch="${b.id}" data-uid="${esc(it.uid)}" title="Duplicate${it.pieceId ? " (the extra copy goes to stock)" : ""}" aria-label="Duplicate ${esc(it.spec.name)}">⧉</button><button type="button" data-act="removeItem" data-batch="${b.id}" data-uid="${esc(it.uid)}" title="${it.pieceId ? "Send back to Needs printing" : "Remove"}" aria-label="Remove ${esc(it.spec.name)}">✕</button></span></div>`).join("")}</div>`; }
+function viewLiveItems(b) { return `<div class="bitems">${b.items.length ? "" : '<span class="sub">Empty. Add stock pieces below.</span>'}${b.items.map((it) => `<div class="bi"><span>${it.pieceId ? orderBtn(it.pieceId, `${pieceLabel(it.spec)} <span class="sub">· ${esc(customerOf(it.pieceId) || "order")}</span>`) : stockTag + pieceLabel(it.spec)}${binFlag(b, it)}</span><span><button type="button" data-act="dupItem" data-batch="${b.id}" data-uid="${esc(it.uid)}" title="Duplicate${it.pieceId ? " (the extra copy goes to stock)" : ""}" aria-label="Duplicate ${esc(it.spec.name)}">⧉</button><button type="button" data-act="removeItem" data-batch="${b.id}" data-uid="${esc(it.uid)}" title="${it.pieceId ? "Send back to Needs printing" : "Remove"}" aria-label="Remove ${esc(it.spec.name)}">✕</button></span></div>`).join("")}</div>`; }
 function viewBatch(printer, slot, count) {
   const { batch: b, index, hours, start, end } = slot; const live = LIVE.has(b.state);
   const stateLabel = { queued: `#${index + 1} in line`, printing: "printing", review: "printed", done: "done" }[b.state];
@@ -451,7 +461,7 @@ function refresh() { if (!host) return; rebuildCatalog(); SALES = sold7(); if (l
 
 /* ---------- events ---------- */
 const uiSet = (fn) => { fn(); persistUi(); render(); };
-const CLICK = {
+const CLICK = { showOrder: (d) => showOrder(d.piece),
   setView: (d) => uiSet(() => { ui.view = d.view; }),
   sortBy: (d) => uiSet(() => { const col = GROUP_COLUMNS.find((c) => c.key === d.key); const first = col.asc ? 1 : -1; const s = ui.sort; ui.sort = s?.key !== d.key ? { key: d.key, dir: first } : s.dir === first ? { key: d.key, dir: -first } : null; }),
   gapGo: (d) => { ui.view = "byitem"; if (!ui.openGroups.includes(d.key)) ui.openGroups.push(d.key); ui.q = ""; ui.due = "all"; persistUi(); render(); const el = host.querySelector(`details[data-group="${CSS.escape(d.key)}"]`); if (el) { el.open = true; el.scrollIntoView({ block: "center", behavior: "smooth" }); } },
