@@ -261,12 +261,19 @@ function dispatch(name, ...args) {
 function undo() { const last = history.pop(); if (!last) return; state = JSON.parse(last.snap); pending.push({ name: "restore", args: [last.snap] }); persist(); render(); toast("Undid " + last.label); }
 actions.restore = (snapStr) => { const s = JSON.parse(snapStr); for (const k of SHARED) if (s[k] !== undefined) state[k] = s[k]; };
 
-/* Bin View follows the plan server-side (hq.plan_apply runs inside every plan save); this tab only tidies its own queue. */
+/* Bin View follows the plan server-side (hq.plan_apply runs inside every plan save); this tab only tidies its own queue.
+   A person's word in Bin View wins over the plan: a piece marked Done (printed) or packed there, or whose order is Done or changed,
+   leaves whatever batch it is in (queued, printing or in review); a batch with nothing left disappears. Finalized batches are history and stay. */
 function binCleanup() {
   if (!loaded || !store.loadedAt) return; let changed = false; const notes = [];
+  // why a piece no longer belongs in a live batch, or "" if it still does
+  const settled = (pieceId) => { const pc = PIECE_BY_ID.get(pieceId); if (!pc) return "order done or changed"; if (pc.bin === "done") return "packed in Bin View"; if (pc.bin === "printed" && LINE_BY_UID.get(pc.line)?.l.print_src !== "plan") return "marked Done in Bin View"; return ""; };
   for (const pr of PRINTERS) state.lanes[pr] = state.lanes[pr].filter((b) => {
-    if (b.state !== B.QUEUED) return true;
-    const keep = b.items.filter((it) => { if (!it.pieceId) return true; const pc = PIECE_BY_ID.get(it.pieceId); const gone = !pc; const handled = pc && (pc.bin === "printed" || pc.bin === "done") && LINE_BY_UID.get(pc.line)?.l.print_src !== "plan"; if (!gone && !handled) return true; changed = true; notes.push(`${it.spec.name}${gone ? " (order done or changed)" : " (marked " + pc.bin + " in Bin View)"}`); return false; });
+    if (b.state === B.DONE) return true;
+    const keep = b.items.filter((it) => {
+      if (!it.pieceId) return true; // stock pieces stay; where a review batch sends them is the finalizer's call
+      const why = settled(it.pieceId); if (!why) return true; changed = true; notes.push(`${it.spec.name} (${why})`); return false;
+    });
     if (keep.length === b.items.length) return true; b.items = keep; return keep.length > 0;
   });
   if (changed) { pending.push({ name: "noop", args: [] }); persist(); toast("Took pieces off the queue to match Bin View: " + notes.slice(0, 3).join(", ") + (notes.length > 3 ? ` +${notes.length - 3}` : "")); }
