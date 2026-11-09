@@ -1,4 +1,4 @@
-// Collections: build a new collection or edit one (name, how it's sold, its pieces and their pinned colorways,
+// Collections: build a new collection or edit one (name, its pieces and their pinned colorways,
 // enclosure-only pieces, choices like Door/Floor). The database checks and saves it in one go (hq.save_collection).
 import * as db from "./supabase.js";
 import { esc, modal, toast, confirmBox, cat, loadCatalog, invalidateCatalog, reloadInventory } from "./orders.js";
@@ -21,18 +21,17 @@ function productColors(p) { // colors the catalog offers this piece in, plus eve
 const optionCodes = (p) => [...new Set(cat.variants.filter((v) => v.product_id === p.id).map((v) => v.option_code || "standard"))].sort((a, b) => (a === "standard" ? -1 : b === "standard" ? 1 : a.localeCompare(b)));
 
 const rowOf = (x) => ({ key: ++seq, id: x.id ?? null, product_id: x.product_id || "", scheme: x.color_scheme_id ?? null, c1: x.color_1 || "", c2: x.color_2 || "", touched: false,
-  size_code: x.size_code || "", qty: x.qty || 1, enclosure_only: !!x.enclosure_only, choice: x.choice || "", choice_option: x.choice_option || "", option_code: x.option_code || "standard", default_option: !!x.default_option, open: !!x.choice });
+  size_code: x.size_code || "", qty: x.qty || 1, enclosure_only: !!x.enclosure_only, hadEnc: !!x.enclosure_only, choice: x.choice || "", choice_option: x.choice_option || "", option_code: x.option_code || "standard", default_option: !!x.default_option, open: !!x.choice });
 
 /* ---------- list ---------- */
 async function showList(note = "") {
   cur = null; orig = "";
   card.innerHTML = `<h3>Collections</h3><p class="sub">Loading…</p>`;
   try { [list] = await Promise.all([db.readCollections(), loadCatalog()]); } catch (e) { card.innerHTML = `<h3>Collections</h3><p class="err">⚠ ${esc(db.errText(e))}</p><div class="row"><button type="button" class="btn ghost" data-close>Close</button></div>`; return; }
-  const sold = (c) => [c.sells_accessory_set && "Accessory set", c.sells_enclosure && "Complete enclosure"].filter(Boolean).join(" · ");
   const pieces = (c) => new Set(c.pieces.map((x) => x.product_id + "|" + (x.color_scheme_id || ""))).size;
   card.innerHTML = `<div class="ce-head"><h3>Collections</h3><button type="button" class="btn mini" data-new>+ New collection</button></div>
     ${note ? `<p class="ce-note">${esc(note)}</p>` : ""}
-    <div class="ce-list">${list.map((c) => `<button type="button" class="ce-item${c.archived ? " retired" : ""}" data-open="${esc(c.id)}"><b>${esc(c.name)}</b><span class="sub">${c.archived ? "Retired" : esc(sold(c))} · ${pieces(c)} ${pieces(c) === 1 ? "piece" : "pieces"}</span></button>`).join("") || `<p class="empty">No collections yet.</p>`}</div>
+    <div class="ce-list">${list.map((c) => `<button type="button" class="ce-item${c.archived ? " retired" : ""}" data-open="${esc(c.id)}"><b>${esc(c.name)}</b><span class="sub">${c.archived ? "Retired · " : ""}${pieces(c)} ${pieces(c) === 1 ? "piece" : "pieces"}</span></button>`).join("") || `<p class="empty">No collections yet.</p>`}</div>
     <div class="row"><button type="button" class="btn ghost" data-close>Close</button></div>`;
 }
 
@@ -74,7 +73,7 @@ function pieceRow(r, i) {
       ${opts.length > 1 || r.option_code !== "standard" ? `<label>Option<select data-f="option_code">${[...new Set([...opts, r.option_code])].map((o) => `<option value="${esc(o)}" ${o === r.option_code ? "selected" : ""}>${esc(optLabel(o))}</option>`).join("")}</select></label>` : ""}
     </div>
     <div class="ce-line ce-flags">
-      <button type="button" class="ce-tog" data-tog="enclosure_only" aria-pressed="${r.enclosure_only}">Complete enclosure only</button>
+      ${r.hadEnc ? `<button type="button" class="ce-tog" data-tog="enclosure_only" aria-pressed="${r.enclosure_only}">Complete enclosure only</button>` : ""}
       <button type="button" class="ce-tog" data-tog="open" aria-pressed="${r.open}">Choice</button>
       ${r.open ? `<label>Choice<input data-f="choice" list="ceChoices${i}" value="${esc(r.choice)}" placeholder="Floor"><datalist id="ceChoices${i}">${choiceNames.map((n) => `<option value="${esc(n)}">`).join("")}</datalist></label>
         <label>Option<input data-f="choice_option" list="ceOpts${i}" value="${esc(r.choice_option)}" placeholder="Substrate"><datalist id="ceOpts${i}">${optNames.map((n) => `<option value="${esc(n)}">`).join("")}</datalist></label>
@@ -87,8 +86,7 @@ function render(err = "") {
   const enc = cur.pieces.filter((r) => r.enclosure_only).length;
   card.innerHTML = `<div class="ce-head"><button type="button" class="btn ghost mini" data-back>‹ Collections</button>${cur.archived ? `<span class="chip hold">Retired</span>` : ""}</div>
     <form class="addvar ce" novalidate>
-      <div class="srow"><label style="flex:2 1 220px">Name<input id="ceName" value="${esc(cur.name)}" placeholder="e.g. Mushroom Forest" autocomplete="off"></label>
-        <div class="ce-sold"><span class="sub">Sold as</span><div><button type="button" class="ce-tog" data-sold="sells_accessory_set" aria-pressed="${cur.sells_accessory_set}">Accessory set</button><button type="button" class="ce-tog" data-sold="sells_enclosure" aria-pressed="${cur.sells_enclosure}">Complete enclosure</button></div></div></div>
+      <div class="srow"><label style="flex:2 1 220px">Name<input id="ceName" value="${esc(cur.name)}" placeholder="e.g. Mushroom Forest" autocomplete="off"></label></div>
       <h4 class="ce-h">Pieces <span class="sub">${cur.pieces.length}${enc ? ` · ${enc} only with the enclosure` : ""}</span></h4>
       <div class="ce-rows">${cur.pieces.map(pieceRow).join("")}</div>
       <button type="button" class="btn ghost mini" data-add>+ Add piece</button>
@@ -175,13 +173,6 @@ export async function open() {
     if (!cur) return;
     if (t.closest("[data-back]")) { if (await leave()) showList(); return; }
     if (t.closest("[data-add]")) { cur.pieces.push(rowOf({})); render(); const rows = card.querySelectorAll("[data-row] select[data-f=product_id]"); const el = rows[rows.length - 1]; if (el) { el.focus(); el.scrollIntoView({ block: "center" }); } return; }
-    if ((b = t.closest("[data-sold]"))) { const k = b.dataset.sold; cur[k] = !cur[k];
-      // a complete enclosure ships the enclosure itself: add it (latch door by default, magnetic as the other choice) the way every enclosure collection has it
-      if (k === "sells_enclosure" && cur[k] && !cur.pieces.some((r) => r.product_id === "enclosure") && prod("enclosure")) {
-        cur.pieces = cur.pieces.filter((r) => r.product_id);
-        cur.pieces.push(rowOf({ product_id: "enclosure", enclosure_only: true, choice: "Door", choice_option: "Latch", default_option: true }), rowOf({ product_id: "enclosure", enclosure_only: true, choice: "Door", choice_option: "Magnet", option_code: "magnetic" }));
-      }
-      render(); return; }
     if (t.closest("[data-del]")) { const r = rowByEl(t); cur.pieces = cur.pieces.filter((x) => x !== r); if (!cur.pieces.length) cur.pieces.push(rowOf({})); render(); return; }
     if ((b = t.closest("[data-tog]"))) { const r = rowByEl(b); const k = b.dataset.tog; r[k] = !r[k]; render(); if (k === "open" && r.open) { const el = card.querySelector(`[data-row="${r.key}"] [data-f=choice]`); if (el) el.focus(); } return; }
     if (t.closest("[data-retire]")) {
