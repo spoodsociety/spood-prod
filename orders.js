@@ -18,12 +18,14 @@ export const toks = (s) => String(s || "").toLowerCase().replace(/&/g, " and ").
 let toastT = 0;
 export function toast(msg, bad = false) { const t = $("#toast"); if (!t) return; t.textContent = msg; t.className = "toast" + (bad ? " bad" : ""); t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, Math.min(10000, Math.max(bad ? 6000 : 2400, String(msg).length * 60))); }
 
-export function modal(html, { label = "Dialog", wide = false } = {}) {
+// guard: called before an Escape or backdrop close; return false to keep the dialog open (unsaved edits)
+export function modal(html, { label = "Dialog", wide = false, guard = null } = {}) {
   const d = document.createElement("div"); d.className = "obmodal"; d.setAttribute("role", "dialog"); d.setAttribute("aria-modal", "true"); d.setAttribute("aria-label", label);
   d.innerHTML = `<div class="obmodal-card${wide ? " wide" : ""}">${html}</div>`;
   const close = () => { d.remove(); document.removeEventListener("keydown", key); };
-  const key = (e) => { if (e.key === "Escape") close(); };
-  d.addEventListener("click", (e) => { if (e.target === d) close(); });
+  const soft = async () => { if (!guard || (await guard()) !== false) close(); };
+  const key = (e) => { if (e.key === "Escape" && d === $("#modalHost").lastElementChild) soft(); };
+  d.addEventListener("click", (e) => { if (e.target === d) soft(); });
   document.addEventListener("keydown", key); $("#modalHost").appendChild(d);
   return { el: d, close };
 }
@@ -535,7 +537,7 @@ export function custRender() {
 export const cat = { opts: null, byProduct: new Map(), variants: [], varByKey: new Map(), varByNotion: new Map(), varById: new Map(), schemes: new Map(), colors: new Map(), colls: new Map() };
 const vkey = (p, s, c, o) => [p, s || "standard", c || "standard", o || "standard"].join("|");
 export function indexCatalog(o) {
-  cat.opts = o || {}; cat.stale = false; const P = cat.opts.products || [];
+  cat.opts = o || {}; cat.stale = false; cat.at = Date.now(); const P = cat.opts.products || [];
   cat.byProduct = new Map(P.map((p) => [p.id, p])); cat.schemes = new Map((cat.opts.color_schemes || []).map((s) => [s.id, s]));
   cat.colors = new Map((cat.opts.colors || []).map((c) => [c.id, c])); cat.colls = new Map((cat.opts.collections || []).map((c) => [c.id, c]));
   cat.variants = cat.opts.variants || []; cat.varByKey = new Map(); cat.varByNotion = new Map(); cat.varById = new Map();
@@ -636,7 +638,8 @@ export function openOrderForm(order = null, focusUid = null, pre = null) {
   };
   // the catalog is cached for the session; an item another person added since (pick_variant, Inventory) isn't in it yet, so re-read it when a line points at an unknown item
   const unknown = order && (order.lines || []).some((l) => l.variant_id != null && !cat.varById.get(String(l.variant_id)));
-  if (cat.opts && !cat.stale && !unknown) return start();
+  // and re-read it when it is a few minutes old, so collections and items added on another device show up
+  if (cat.opts && !cat.stale && !unknown && Date.now() - (cat.at || 0) < 180000) return start();
   $("#odBinsCard").hidden = false; $("#odHost").innerHTML = `<div class="empty">Loading the catalog…</div>`;
   loadCatalog(true).then(start).catch((e) => { $("#odHost").innerHTML = `<div class="err">⚠ ${esc(db.errText(e))}</div>`; });
 }

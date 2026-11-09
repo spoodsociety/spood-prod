@@ -510,6 +510,25 @@ label.allto{display:flex;flex-direction:row;gap:6px;align-items:center;font-size
 #invHost .tile.ok{border-color:var(--good)}
 #invHost .tile.add{border-style:dashed;background:transparent;justify-content:center}#invHost .tile.add .tl{color:var(--muted);line-height:1.2}
 #invHost .crow.addrow{grid-template-columns:1fr;justify-items:start;border-top:none;padding-top:0}
+#invHost .invact{display:flex;gap:8px;flex-wrap:wrap}
+.ce-card{max-width:760px!important}
+.ce-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}.ce-head h3{margin:0}
+.ce-note{margin:0 0 10px}
+.ce-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px;margin-bottom:16px}
+.ce-item{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;font:inherit;color:var(--fg);background:var(--bg);border:1.5px solid var(--line);border-radius:16px;padding:10px 14px;cursor:pointer}
+.ce-item:hover{border-color:var(--accent)}.ce-item.retired{opacity:.6;border-style:dashed}
+.ce .srow{align-items:flex-end;margin-bottom:6px}
+.ce-sold{display:flex;flex-direction:column;gap:4px}.ce-sold>div{display:flex;gap:6px;flex-wrap:wrap}
+.ce-tog{font:700 .8rem var(--body);padding:7px 12px;border-radius:999px;border:1.5px solid var(--line);background:transparent;color:var(--muted);cursor:pointer}
+.ce-tog[aria-pressed="true"]{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+.ce-h{margin:14px 0 8px;font:800 1rem var(--display)}
+.ce-rows{display:flex;flex-direction:column;gap:8px;margin-bottom:10px}
+.ce-row{border:1.5px solid var(--line);border-radius:16px;padding:10px 12px;display:flex;flex-direction:column;gap:8px;background:var(--bg)}
+.ce-line{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end}
+.ce .ce-line label{min-width:120px}.ce .ce-line label.ce-piece{flex:3 1 140px;min-width:0}.ce .ce-line label.ce-qty{flex:0 0 72px;min-width:72px}
+.ce-x{flex:0 0 auto;width:38px;height:38px;border-radius:50%;border:0;background:transparent;color:var(--muted);font-size:1.3rem;cursor:pointer}.ce-x:hover{background:var(--bad-soft);color:var(--bad)}
+.ce-flags{align-items:center}.ce .ce-flags label{flex:1 1 130px}.ce .ce-flags label.ce-def{flex:0 0 auto;min-width:0}.ce-def span{display:flex;align-items:center;gap:6px;padding:8px 0;color:var(--fg)}
+.ce .err{margin:10px 0}.ce-foot{margin-top:14px;flex-wrap:wrap}
 .addvar .srow{display:flex;flex-wrap:wrap;gap:10px}.addvar label{display:flex;flex-direction:column;gap:4px;font-size:.8rem;color:var(--muted);min-width:140px;flex:1}.addvar select,.addvar input{font:inherit;padding:8px 10px;border-radius:8px;border:1.5px solid var(--line);background:var(--bg);color:var(--fg)}.addvar .err{color:var(--bad);min-height:1.2em;margin:8px 0 0}
 #invHost .tile .need{color:var(--bad);font-weight:700}
 #invHost .tile .held{color:var(--muted)}
@@ -618,7 +637,7 @@ label.allto{display:flex;flex-direction:row;gap:6px;align-items:center;font-size
 <div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
 <div id="modalHost"></div>
 
-<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611090927","./orders.js":"./orders.js?v=2611090927","./printplan.js":"./printplan.js?v=2611090927","./inventory.js":"./inventory.js?v=2611090927"}}</script>
+<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611091207","./orders.js":"./orders.js?v=2611091207","./printplan.js":"./printplan.js?v=2611091207","./inventory.js":"./inventory.js?v=2611091207","./collections.js":"./collections.js?v=2611091207"}}</script>
 <script type="module">
 import * as db from "./supabase.js";
 import * as orders from "./orders.js";
