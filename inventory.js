@@ -1,6 +1,6 @@
 // Inventory: shelf view (tiles per variation), list view (end-of-day count), counts and adjustments through apply_moves.
 import * as db from "./supabase.js";
-import { $, esc, plural, store, onChange, owed, splitName, sizeLabel, toast, modal, reloadInventory, setErr, shipBy, fmtDay, cleanText, invRowOf, eff, lineKind, loadCatalog, invalidateCatalog } from "./orders.js";
+import { $, esc, plural, store, onChange, owed, splitName, sizeLabel, sizeOptions, toast, modal, reloadInventory, setErr, shipBy, fmtDay, cleanText, invRowOf, eff, lineKind, loadCatalog, invalidateCatalog } from "./orders.js";
 
 const PRODUCT_ORDER = ["Cosmic", "Galaxy", "Gothic", "Haunted", "Neon Halloween", "Woodland", "Yeti", "Ocean", "Christmas", "Celestial Bat"];
 const TAIL = ["Floor Inserts", "Hides", "Supplies"];
@@ -118,13 +118,13 @@ async function addVariation(it) {
   const prod = productOf(it, opts); const v0 = it.vars[0];
   const collName = v0.r.collection || (prod && prod.collections && prod.collections.length ? ((opts.collections || []).find((c) => c.id === prod.collections[0]) || {}).name : "") || "";
   const twoColors = (prod && prod.category === "Floor Insert") || /floor|checker/i.test(it.name + " " + v0.base);
-  const sizes = [...new Set([...(prod ? prod.sizes || [] : []), ...it.vars.map((v) => v.size).filter(Boolean), "Small", "Large"])];
+  const sizes = prod ? prod.sizes || [] : [...new Set(it.vars.map((v) => v.size).filter(Boolean))]; // sizes this piece already has
   const colors = (opts.colors || []).map((c) => c.name).sort((a, b) => a.localeCompare(b));
   const existing = new Set(it.vars.map((v) => (sizeLabel(v.size || "Standard") + "|" + (v.color || "")).toLowerCase()));
   const sel = (id, list, cur) => `<select id="${id}">${list.map((x) => `<option ${x === cur ? "selected" : ""}>${esc(x)}</option>`).join("")}<option value="__other">Other…</option></select>`;
   card.innerHTML = `<h3>Add a color or size</h3><p class="sub"><b>${esc(prod ? prod.name : it.name)}</b>${collName ? " · " + esc(collName) : ""}</p>
     <p class="sub">On the shelf now: ${it.vars.map((v) => esc(label(v))).join(", ")}</p>
-    <form class="addvar"><div class="srow"><label>Size${sel("avSize", sizes, sizeLabel(v0.size || "Small"))}<input id="avSizeOther" placeholder="Size name" hidden></label>
+    <form class="addvar"><div class="srow"><label>Size<select id="avSize">${sizeOptions(sizes, v0.size || "Small")}</select><input id="avSizeOther" placeholder="Size name" hidden></label>
     <label>Color${twoColors ? " 1" : ""}${sel("avC1", ["(none)", ...colors], "(none)")}<input id="avC1Other" placeholder="Color name" hidden></label>
     ${twoColors ? `<label>Color 2${sel("avC2", ["(none)", ...colors], "(none)")}<input id="avC2Other" placeholder="Color name" hidden></label>` : ""}
     <label>Starting count<input id="avCount" type="number" min="0" max="999" value="0" inputmode="numeric"></label></div>
@@ -140,7 +140,7 @@ async function addVariation(it) {
     const colorLabel = [c1, c2].filter(Boolean).join(" + ");
     if (existing.has((sizeLabel(size) + "|" + colorLabel).toLowerCase())) return err(`${label({ size, color: colorLabel })} is already on the shelf.`);
     const isNew = []; if (!sizes.includes(size)) isNew.push("size"); for (const c of [c1, c2]) if (c && !colors.includes(c)) isNew.push("color:" + c);
-    const inventory_name = `${v0.base} (${[size, colorLabel].filter(Boolean).join(", ")})`;
+    const inventory_name = `${v0.base} (${[size === "Standard" ? "" : size, colorLabel].filter(Boolean).join(", ")})`.replace(/ \(\)$/, "");
     const payload = { product: prod ? prod.name : it.name, collection: collName || null, size, color_1: c1 || null, color_2: c2 || null, inventory_name, new: isNew };
     const btn = q("#avSave"); btn.disabled = true; btn.textContent = "Adding…";
     let r; try { r = await db.addVariant(payload); } catch (x) { btn.disabled = false; btn.textContent = "Add"; return err(db.errText(x)); }
@@ -159,7 +159,7 @@ async function newItem() {
   const sel = (id, list, first) => `<select id="${id}">${first ? `<option value="">${first}</option>` : ""}${list.map((x) => `<option>${esc(x)}</option>`).join("")}<option value="__other">Other…</option></select><input id="${id}Other" hidden>`;
   card.innerHTML = `<h3>Add item</h3><form class="addvar">
     <div class="srow"><label style="flex:2 1 220px">Name<input id="nName" placeholder="e.g. Mushroom Ledge" required></label><label>Collection${sel("nColl", colls, "(none)")}</label><label>Type<select id="nCat">${cats.filter((c) => !/^(Kit|Set|Enclosure)$/.test(c)).map((c) => `<option>${esc(c)}</option>`).join("")}</select></label></div>
-    <div class="srow"><label>Size${sel("nSize", ["Small", "Large", "Sling"], "")}</label><label>Color${sel("nC1", colors, "(none)")}</label><label id="nC2wrap" hidden>Color 2${sel("nC2", colors, "(none)")}</label><label>Starting count<input id="nCount" type="number" min="0" max="999" value="0" inputmode="numeric"></label></div>
+    <div class="srow"><label>Size<select id="nSize">${sizeOptions([], "Small", true)}</select><input id="nSizeOther" placeholder="Size name" hidden></label><label>Color${sel("nC1", colors, "(none)")}</label><label id="nC2wrap" hidden>Color 2${sel("nC2", colors, "(none)")}</label><label>Starting count<input id="nCount" type="number" min="0" max="999" value="0" inputmode="numeric"></label></div>
     <p class="err" id="nErr"></p><div class="row"><button type="submit" class="btn accent" id="nSave">Add</button><button type="button" class="btn ghost" data-close>Cancel</button></div></form>`;
   const q = (s) => card.querySelector(s); const err = (t) => { q("#nErr").textContent = t || ""; };
   q("[data-close]").onclick = m.close; q("#nSize").value = "Small";
@@ -171,7 +171,7 @@ async function newItem() {
     const name = q("#nName").value.trim(), coll = val("nColl"), cat = q("#nCat").value, size = val("nSize"), c1 = val("nC1"), c2 = cat === "Floor Insert" ? val("nC2") : ""; const n = Math.max(0, Math.round(Number(q("#nCount").value) || 0));
     if (!name) return err("Give it a name."); if (!size) return err("Pick or type a size."); if (c2 && !c1) return err("Pick Color 1 first.");
     const colorLabel = [c1, c2].filter(Boolean).join(" + ");
-    const inventory_name = `${coll ? coll + " - " : ""}${name} (${[size, colorLabel].filter(Boolean).join(", ")})`;
+    const inventory_name = `${coll ? coll + " - " : ""}${name} (${[size === "Standard" ? "" : size, colorLabel].filter(Boolean).join(", ")})`.replace(/ \(\)$/, "");
     if (store.inv.some((r) => r.item.toLowerCase() === inventory_name.toLowerCase())) return err(`${inventory_name} is already in Inventory.`);
     const isNew = ["product", "size"]; if (coll && !colls.includes(coll)) isNew.push("collection"); for (const c of [c1, c2]) if (c && !colors.includes(c)) isNew.push("color:" + c);
     const btn = q("#nSave"); btn.disabled = true; btn.textContent = "Adding…";
@@ -202,7 +202,7 @@ export async function addToCatalog(pre = {}, onDone = null) {
     <p class="err" id="acErr"></p><div class="row"><button type="submit" class="btn accent" id="acSave">Add</button><button type="button" class="btn ghost" data-close>Cancel</button></div></form>`;
   const q = (s) => card.querySelector(s); const err = (t) => { q("#acErr").textContent = t || ""; };
   const curProd = () => prods.find((p) => p.id === q("#acProd").value) || null;
-  const fillSizes = () => { const p = curProd(); const sizes = [...new Set([...(p ? p.sizes || [] : []), "Small", "Large", "Custom"])]; const want = pre.size && sizes.includes(pre.size) ? pre.size : (sizes.includes("Small") ? "Small" : sizes[0]); q("#acSize").innerHTML = pick(sizes, want) + `<option value="__other">Other…</option>`; };
+  const fillSizes = () => { const p = curProd(); q("#acSize").innerHTML = sizeOptions(p ? p.sizes || [] : [], pre.size || "Small", !p); q("#acSizeOther").hidden = true; };
   const refresh = () => { const isNew = q("#acProd").value === "__new"; q("#acNewRow").hidden = !isNew; const p = curProd(); const two = isNew ? q("#acCat").value === "Floor Insert" : !!(p && (p.category === "Floor Insert" || (p.offered && p.offered["2"]))); q("#acC2wrap").hidden = !two; fillSizes(); err(""); };
   card.querySelectorAll("select").forEach((s) => s.addEventListener("change", () => { const o = q("#" + s.id + "Other"); if (o) { o.hidden = s.value !== "__other"; if (!o.hidden) o.focus(); } if (s.id === "acProd" || s.id === "acCat") refresh(); else err(""); }));
   refresh(); if (pre.size === "Custom") q("#acSize").value = "Custom";
@@ -217,7 +217,7 @@ export async function addToCatalog(pre = {}, onDone = null) {
     const coll = isNew ? q("#acColl").value : (p && p.collections && p.collections.length ? collName(p.collections[0]) : "");
     // the piece's existing inventory-name prefix, from this product's own variants (as hq.pick_variant does); a sku prefix test would also match cloud-ledge-w-bat for cloud-ledge
     const base = isNew ? `${coll ? coll + " - " : ""}${name}` : (((opts.variants || []).find((v) => v.product_id === p.id && v.name) || {}).name || `${coll ? coll + " - " : ""}${name}`).split(" (")[0];
-    const inventory_name = `${base} (${[size, colorLabel].filter(Boolean).join(", ")})`;
+    const inventory_name = `${base} (${[size === "Standard" ? "" : size, colorLabel].filter(Boolean).join(", ")})`.replace(/ \(\)$/, "");
     const dup = store.inv.find((r) => r.item.toLowerCase() === inventory_name.toLowerCase()); if (dup) { m.close(); if (onDone) onDone(dup.id, dup.item); return; }
     const isNewFlags = isNew ? ["product", "size"] : []; if (!isNew && p && !(p.sizes || []).includes(size)) isNewFlags.push("size"); for (const c of [c1, c2]) if (c && !colors.includes(c)) isNewFlags.push("color:" + c);
     const btn = q("#acSave"); btn.disabled = true; btn.textContent = "Adding…";

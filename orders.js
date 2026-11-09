@@ -107,7 +107,7 @@ export const invRowOf = (l) => (l.notion_inventory_id ? store.invById.get(l.noti
 export const encVar = (l) => { const m = String(l.sku || "").match(/^enclosure-(small|large)(?:-(\w+))?$/i); return m ? { size: m[1].toLowerCase(), opt: (m[2] || "").toLowerCase() } : null; };
 
 // Inventory item names: "Gothic - Web Climb (Small, Black)" -> base, size, color
-export const SIZES = ["Small", "Large", "Sling Size", "Standard", "Custom", "Default Size"];
+export const SIZES = ["Small", "Large", "Mini", "Sling Size", "Standard", "Custom", "Default Size"];
 // `size` is the catalog's size for that item (inventory_rows.size), so a size outside the usual list ("Mini") is still read as a size.
 export function splitName(name, size) {
   const m = String(name || "").match(/^(.*?)\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)\s*$/);
@@ -119,6 +119,16 @@ export function splitName(name, size) {
   return { base: m[1].trim(), size: sizes[0] || "", color: colors.join(" + ") };
 }
 export const sizeLabel = (s) => (!s || /^(standard|default size)$/i.test(s) ? "Small" : s === "Sling Size" ? "Sling" : s);
+// The shop's sizes, in the order every size dropdown lists them. "Sling Size" is the stored name (shown as Sling); a one-size piece is stored as Standard.
+export const SIZE_OPTIONS = ["Large", "Small", "Mini", "Sling Size", "Custom"];
+const oneSizeOnly = (ps) => ps.length > 0 && ps.every((x) => /^standard$/i.test(x));
+// <option>s for a size dropdown. prodSizes = the sizes the product already has (a one-size product offers nothing else); oneSize adds "One size" for a brand-new piece.
+export function sizeOptions(prodSizes, cur, oneSize) {
+  const ps = (prodSizes || []).filter(Boolean);
+  if (oneSizeOnly(ps)) return `<option value="Standard" selected>One size</option>`;
+  const list = [...new Set([...SIZE_OPTIONS, ...ps, ...(oneSize ? ["Standard"] : [])])];
+  return list.map((x) => `<option value="${esc(x)}"${x === cur ? " selected" : ""}>${esc(/^standard$/i.test(x) ? "One size" : sizeLabel(x))}</option>`).join("") + `<option value="__other">Other…</option>`;
+}
 
 // spec from a line: inventory row name when matched, else the line text itself
 export function lineSpec(l) {

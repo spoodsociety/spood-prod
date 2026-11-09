@@ -1,7 +1,7 @@
 // Collections: build a new collection or edit one (name, its pieces and their pinned colorways,
 // enclosure-only pieces, choices like Door/Floor). The database checks and saves it in one go (hq.save_collection).
 import * as db from "./supabase.js";
-import { esc, modal, toast, confirmBox, cat, loadCatalog, invalidateCatalog, reloadInventory } from "./orders.js";
+import { esc, sizeOptions, modal, toast, confirmBox, cat, loadCatalog, invalidateCatalog, reloadInventory } from "./orders.js";
 
 let M = null, card = null, list = [], cur = null, orig = "", busy = false, seq = 0;
 const CAT_ORDER = ["Enclosure", "Hide", "Ledge", "Climb", "Floor Insert", "Insert", "Figure", "Add-on", "Supply", "Part", "Kit", "Set"];
@@ -126,7 +126,7 @@ function newPiece(row) {
   const copt = colors.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("");
   const m = modal(`<h3>New piece</h3><form class="addvar">
     <div class="srow"><label style="flex:2 1 220px">Name<input id="npName" placeholder="e.g. Mushroom Ledge" autocomplete="off"></label><label>Type<select id="npCat">${cats.map((c) => `<option ${c === "Ledge" ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></label></div>
-    <div class="srow"><label>Size<select id="npSize">${["Small", "Large", "Sling Size", "Standard"].map((x) => `<option>${x}</option>`).join("")}</select></label>
+    <div class="srow"><label>Size<select id="npSize">${sizeOptions([], "Small", true).replace(/<option value="__other">.*$/, "")}</select></label>
       <label>Color<select id="npC1"><option value="">(none)</option>${copt}</select></label><label id="npC2w" hidden>Color 2<select id="npC2"><option value="">(none)</option>${copt}</select></label>
       <label>On the shelf<input id="npCount" type="number" min="0" max="999" value="0" inputmode="numeric"></label></div>
     <p class="err" id="npErr" hidden></p><div class="row"><button type="button" class="btn ghost" data-np-close>Cancel</button><button type="submit" class="btn accent" id="npSave">Add piece</button></div></form>`, { label: "New piece" });
