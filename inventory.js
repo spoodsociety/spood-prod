@@ -4,7 +4,8 @@ import { $, esc, plural, store, onChange, owed, splitName, sizeLabel, toast, mod
 
 const PRODUCT_ORDER = ["Cosmic", "Galaxy", "Gothic", "Haunted", "Neon Halloween", "Woodland", "Yeti", "Ocean", "Christmas", "Celestial Bat"];
 const TAIL = ["Floor Inserts", "Hides", "Supplies"];
-const SIZE_ORDER = ["Sling Size", "Small", "Standard", "Large", "Custom", ""];
+const SIZE_ORDER = ["Mini", "Sling Size", "Small", "Standard", "Large", "", "Custom", ""];
+const sizeRank = (s) => { const i = SIZE_ORDER.indexOf(s); return i < 0 ? 5 : s ? i : 7; }; // a size not listed sorts after Large
 const typeOf = (n) => (/climb|wall|tree|tower/i.test(n) ? "Wall climbs" : /floor|insert|substrate|wrap|panel/i.test(n) ? "Floor inserts" : /ledge|rock|cloud|window|bat\b/i.test(n) ? "Ledges" : /enclosure|kit|feeder|bowl/i.test(n) ? "Supplies" : "Hides");
 function collOf(r, type) { const c = r.collection || ""; if (/^floor/i.test(c) || (type === "Floor inserts" && (!c || c === "Natural"))) return "Floor Inserts"; if (!c || c === "Natural" || c === "Other") return type === "Supplies" ? "Supplies" : "Hides"; return c; }
 function itemName(base, coll) { let n = base; for (const pre of [coll, ...PRODUCT_ORDER, "Floor Insert", "Floor"]) { const m = n.match(new RegExp("^" + pre.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\s*-\\s*(.+)$", "i")); if (m) { n = m[1]; break; } } return n.trim() || base; }
@@ -18,11 +19,11 @@ let saving = false;
 
 function committedTo(r) { const out = []; for (const o of store.open) for (const l of o.lines || []) { if (l.notion_inventory_id !== r.id) continue; const e = eff(l); if (e.st === "shelf" || (e.st === "packed" && e.from === "shelf") || e.a) out.push({ customer: o.customer, qty: e.a || Number(l.qty) || 1, shipBy: shipBy(o) }); } return out; }
 function build() {
-  const V = store.inv.map((r) => { const sp = splitName(r.item); const type = typeOf(r.item); const c = collOf(r, type); const item = itemName(sp.base, c); const need = owed.get(r.id) || 0; const stock = r.in_stock; const used = stock == null ? 0 : Math.min(Math.max(0, stock), need);
+  const V = store.inv.map((r) => { const sp = splitName(r.item, r.size); const type = typeOf(r.item); const c = collOf(r, type); const item = itemName(sp.base, c); const need = owed.get(r.id) || 0; const stock = r.in_stock; const used = stock == null ? 0 : Math.min(Math.max(0, stock), need);
     return { id: r.id, r, item, base: sp.base, size: sp.size, color: sp.color, coll: c, type, stock, val: edits.has(r.id) ? edits.get(r.id) : stock, need, used, tracked: stock != null }; });
   const by = new Map(); const ITEMS = [];
   V.forEach((v) => { const k = v.coll + "|" + v.item.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+hide$/, "").trim(); if (!by.has(k)) { by.set(k, { key: k, name: v.item, coll: v.coll, type: v.type, vars: [] }); ITEMS.push(by.get(k)); } const it = by.get(k); if (v.item.length > it.name.length) it.name = v.item; it.vars.push(v); });
-  ITEMS.forEach((it) => { it.vars.forEach((v) => (v.item = it.name)); it.vars.sort((a, b) => SIZE_ORDER.indexOf(a.size) - SIZE_ORDER.indexOf(b.size) || String(a.color).localeCompare(String(b.color))); });
+  ITEMS.forEach((it) => { it.vars.forEach((v) => (v.item = it.name)); it.vars.sort((a, b) => sizeRank(a.size) - sizeRank(b.size) || String(a.color).localeCompare(String(b.color))); });
   ITEMS.sort((a, b) => a.name.localeCompare(b.name));
   const present = new Set(V.map((v) => v.coll));
   const COLLS = [...PRODUCT_ORDER.filter((c) => present.has(c)), ...[...present].filter((c) => !PRODUCT_ORDER.includes(c) && !TAIL.includes(c)).sort(), ...TAIL.filter((c) => present.has(c))];

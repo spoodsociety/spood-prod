@@ -108,11 +108,13 @@ export const encVar = (l) => { const m = String(l.sku || "").match(/^enclosure-(
 
 // Inventory item names: "Gothic - Web Climb (Small, Black)" -> base, size, color
 export const SIZES = ["Small", "Large", "Sling Size", "Standard", "Custom", "Default Size"];
-export function splitName(name) {
+// `size` is the catalog's size for that item (inventory_rows.size), so a size outside the usual list ("Mini") is still read as a size.
+export function splitName(name, size) {
   const m = String(name || "").match(/^(.*?)\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)\s*$/);
   if (!m) return { base: String(name || "").trim(), size: "", color: "" };
   const parts = m[2].split(/,\s*(?![^()]*\))/).map((x) => x.trim()).filter(Boolean);
-  const sizes = parts.filter((p) => SIZES.some((s) => s.toLowerCase() === p.toLowerCase()));
+  const known = size ? [...SIZES, size] : SIZES;
+  const sizes = parts.filter((p) => known.some((s) => s.toLowerCase() === p.toLowerCase()));
   const colors = parts.filter((p) => !sizes.includes(p));
   return { base: m[1].trim(), size: sizes[0] || "", color: colors.join(" + ") };
 }
@@ -121,7 +123,7 @@ export const sizeLabel = (s) => (!s || /^(standard|default size)$/i.test(s) ? "S
 // spec from a line: inventory row name when matched, else the line text itself
 export function lineSpec(l) {
   const r = invRowOf(l);
-  if (r) { const sp = splitName(r.item); return { name: sp.base, size: sp.size, color: sp.color, inv: r.id, custom: /^custom$/i.test(sp.size) }; }
+  if (r) { const sp = splitName(r.item, r.size); return { name: sp.base, size: sp.size, color: sp.color, inv: r.id, custom: /^custom$/i.test(sp.size) }; }
   const t = cleanText(l.text).replace(/^\d{1,2}\s*[x×]?\s+(?=[a-z])/i, "");
   const parts = /\s[-–]\s/.test(t) ? t.split(/\s[-–]\s/) : t.split(/\s*,\s*/);
   const name = parts.shift().replace(/\(.*?\)/g, "").trim(); const det = parts.join(", ");
