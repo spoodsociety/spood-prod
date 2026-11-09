@@ -48,7 +48,7 @@ function productSelect(r) {
   const groups = new Map(); for (const p of (cat.opts.products || [])) { const k = p.category || "Other"; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(p); }
   const keys = [...groups.keys()].sort((a, b) => (CAT_ORDER.indexOf(a) + 1 || 99) - (CAT_ORDER.indexOf(b) + 1 || 99) || a.localeCompare(b));
   const missing = r.product_id && !prod(r.product_id) ? `<option value="${esc(r.product_id)}" selected>${esc(r.product_id)} (removed)</option>` : "";
-  return `<select data-f="product_id" aria-label="Piece"><option value="">Pick a piece…</option>${missing}${keys.map((k) => `<optgroup label="${esc(k)}">${groups.get(k).sort((a, b) => a.name.localeCompare(b.name)).map((p) => `<option value="${esc(p.id)}" ${p.id === r.product_id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</optgroup>`).join("")}</select>`;
+  return `<select data-f="product_id" aria-label="Piece"><option value="">Pick a piece…</option><option value="__new">+ New piece…</option>${missing}${keys.map((k) => `<optgroup label="${esc(k)}">${groups.get(k).sort((a, b) => a.name.localeCompare(b.name)).map((p) => `<option value="${esc(p.id)}" ${p.id === r.product_id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</optgroup>`).join("")}</select>`;
 }
 function colorSelect(r, p, slot) {
   const pc = productColors(p); const mine = slot === 1 ? pc.s1 : pc.s2; const val = slot === 1 ? r.c1 : r.c2;
@@ -121,6 +121,46 @@ async function save() {
   await showList();
 }
 
+/* ---------- a piece the catalog doesn't have yet: made through add_variant (product + its first size/colorway), then picked on this row ---------- */
+function newPiece(row) {
+  const cats = ((cat.opts.categories || []).length ? cat.opts.categories : ["Hide", "Ledge", "Climb", "Floor Insert", "Insert", "Figure", "Part", "Enclosure", "Add-on", "Supply"]).filter((c) => !/^(Kit|Set)$/.test(c));
+  const colors = [...cat.colors.values()].sort((a, b) => a.name.localeCompare(b.name));
+  const copt = colors.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("");
+  const m = modal(`<h3>New piece</h3><form class="addvar">
+    <div class="srow"><label style="flex:2 1 220px">Name<input id="npName" placeholder="e.g. Mushroom Ledge" autocomplete="off"></label><label>Type<select id="npCat">${cats.map((c) => `<option ${c === "Ledge" ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></label></div>
+    <div class="srow"><label>Size<select id="npSize">${["Small", "Large", "Sling Size", "Standard"].map((x) => `<option>${x}</option>`).join("")}</select></label>
+      <label>Color<select id="npC1"><option value="">(none)</option>${copt}</select></label><label id="npC2w" hidden>Color 2<select id="npC2"><option value="">(none)</option>${copt}</select></label>
+      <label>On the shelf<input id="npCount" type="number" min="0" max="999" value="0" inputmode="numeric"></label></div>
+    <p class="err" id="npErr" hidden></p><div class="row"><button type="button" class="btn ghost" data-np-close>Cancel</button><button type="submit" class="btn accent" id="npSave">Add piece</button></div></form>`, { label: "New piece" });
+  const g = (s) => m.el.querySelector(s); const err = (t) => { g("#npErr").textContent = t || ""; g("#npErr").hidden = !t; };
+  const two = () => { g("#npC2w").hidden = g("#npCat").value !== "Floor Insert"; };
+  g("#npCat").onchange = two; g("form").oninput = () => err(""); g("[data-np-close]").onclick = m.close; setTimeout(() => g("#npName").focus(), 30);
+  g("form").onsubmit = async (e) => {
+    e.preventDefault(); err("");
+    const name = g("#npName").value.trim().replace(/\s+/g, " "), category = g("#npCat").value, size = g("#npSize").value;
+    const c1 = g("#npC1").value, c2 = g("#npC2w").hidden ? "" : g("#npC2").value; const n = Math.max(0, Math.round(Number(g("#npCount").value) || 0));
+    if (!name) return err("Give the piece a name.");
+    if (c2 && !c1) return err("Pick Color 1 first.");
+    const key = (x) => String(x).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim(); // as the database compares names
+    const same = (cat.opts.products || []).find((p) => key(p.name) === key(name) || (p.aliases || []).some((a) => key(a) === key(name)));
+    if (same) return err(`${same.name} is already in the catalog. Pick it from the list.`);
+    const colorLabel = [c1, c2].filter(Boolean).map(colorName).join(" + ");
+    const base = cur && cur.name.trim() ? `${cur.name.trim()} - ${name}` : name;
+    const inventory_name = `${base} (${[size, colorLabel].filter(Boolean).join(", ")})`;
+    const btn = g("#npSave"); btn.disabled = true; btn.textContent = "Adding…";
+    let r; try { r = await db.addVariant({ product: name, category, size, color_1: c1 ? colorName(c1) : null, color_2: c2 ? colorName(c2) : null, inventory_name, new: ["product", "size"] }); }
+    catch (x) { btn.disabled = false; btn.textContent = "Add piece"; return err(db.errText(x)); }
+    invalidateCatalog();
+    try { await loadCatalog(true); } catch (x) { /* the piece is made; the row is filled once the catalog reads */ }
+    const v = cat.varById.get(String(r.variant_id)); const pid = v ? v.product_id : ((cat.opts.products || []).find((p) => p.name.toLowerCase() === name.toLowerCase()) || {}).id;
+    let note = "";
+    if (n > 0) { try { await db.applyMoves([{ notion_id: r.notion_id, kind: "count", qty: n, reason: "Starting count", ref: "inventory" }]); } catch (x) { note = ` · the shelf count wasn't saved (${db.errText(x)}); count it in Inventory`; } }
+    m.close(); reloadInventory().catch(() => {});
+    if (pid && cur && cur.pieces.includes(row)) { Object.assign(row, { product_id: pid, scheme: null, c1: "", c2: "", touched: true, size_code: "", option_code: "standard" }); render(); }
+    toast(`Added ${inventory_name} to the catalog${note}`, !!note || !pid);
+  };
+}
+
 async function leave() { if (!dirty()) return true; return confirmBox({ title: "Discard changes?", body: "Your edits to this collection aren't saved.", ok: "Discard" }); }
 
 export async function open() {
@@ -155,6 +195,7 @@ export async function open() {
     if (f === "qty" || f === "choice" || f === "choice_option") r[f] = t.value;
   });
   card.addEventListener("change", (e) => { if (!cur) return; const t = e.target; const f = t.dataset.f; if (!f) return; const r = rowByEl(t);
+    if (f === "product_id" && t.value === "__new") { t.value = r.product_id; newPiece(r); return; }
     if (f === "product_id") { r.product_id = t.value; r.scheme = null; r.c1 = ""; r.c2 = ""; r.touched = true; r.size_code = ""; r.option_code = "standard"; render(); return; }
     if (f === "c1" || f === "c2") { r[f] = t.value; r.touched = true; if (f === "c1" && (!t.value || t.value === "__std")) r.c2 = ""; render(); return; }
     if (f === "size_code" || f === "option_code") { r[f] = t.value; return; }
