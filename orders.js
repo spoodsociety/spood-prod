@@ -738,9 +738,10 @@ function custCard(f, custs) {
 // redrawing the form keeps the field the person is in (and their place on the page): a pick or a tag tap must not drop focus
 const focusKey = (el) => { if (!el || !el.dataset) return ""; const d = el.dataset; if (el.id) return "#" + el.id; if (d.f) return `[data-f="${d.f}"]`; if (d.l != null && d.lf) return `[data-l="${d.l}"][data-lf="${d.lf}"]`; return ""; }; // not the item search box: refocusing it would reopen its list
 function formRender() {
-  const f = F.form; if (!f) return; const host = $("#odHost");
+  const f = F.form; if (!f || F.drawing) return; const host = $("#odHost");
   const a = document.activeElement; const key = host.contains(a) ? focusKey(a) : ""; const sel = key && a.selectionStart != null ? [a.selectionStart, a.selectionEnd] : null; const top = window.scrollY;
-  formDraw(f, host);
+  // replacing the form drops the focused field, and the browser fires its blur/change while the old form is being torn down: a handler that read or redrew then would write old fields over the new lines and break this draw
+  F.drawing = true; try { formDraw(f, host); } finally { F.drawing = false; }
   if (key) { const el = host.querySelector(key); if (el) { el.focus({ preventScroll: true }); if (sel && el.setSelectionRange) { try { el.setSelectionRange(sel[0], sel[1]); } catch (e) {} } } }
   if (window.scrollY !== top) window.scrollTo(0, top);
 }
@@ -859,7 +860,7 @@ function wireForm(host, custs) {
     const keep = (h.p.size_codes || []).some((s) => s.code === old.size_code) ? old.size_code : encSize(f) || undefined;
     f.lines[i] = { ...pickLine(h.p.id, { size_code: keep }), uid: old.uid, qty: old.qty, note: old.note, tag: old.tag, group_uid: old.group_uid, src: old.src, said: old.said || "" }; formRender(); });
     inp.addEventListener("blur", () => setTimeout(() => { if (document.activeElement !== inp) inp.value = inp.dataset.was; }, 150)); });
-  host.onchange = async (e) => { const t = e.target;
+  host.onchange = async (e) => { const t = e.target; if (F.drawing) return;
     if (t.matches("[data-f='collection']")) { const prev = f.collection; read(); const next = f.collection; f.collection = prev;
       if (next && f.lines.some((l) => l.src !== "collection" && l.src !== "enclosure") && !(await confirmBox({ title: "Replace the items?", body: "The collection's pieces replace what's listed now.", ok: "Replace" }))) { formRender(); return; }
       f.collection = next; f.choices = {}; if (!next) f.lines = f.lines.filter((l) => l.src !== "collection"); else { f.lines = f.lines.filter((l) => l.src === "collection" || l.src === "enclosure"); try { await applyCollection(f); } catch (x) { f.collection = prev; toast(db.errText(x), true); } } formRender(); return; }
