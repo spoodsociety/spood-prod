@@ -400,19 +400,19 @@ label.allto{display:flex;flex-direction:row;gap:6px;align-items:center;font-size
 #pqHost .gapchips{display:flex;flex-wrap:wrap;gap:6px}
 #pqHost .gapchip{border:1px solid var(--field-line);background:var(--field);color:var(--fg);border-radius:999px;padding:4px 12px;font:700 .8rem var(--body);cursor:pointer}
 #pqHost .gapchip.big{border-color:var(--bad);color:var(--bad)}
-#pqHost .lanes{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;align-items:start}
-#pqHost .lane{background:var(--n-col);border-radius:28px;padding:16px;display:flex;flex-direction:column;gap:12px;box-shadow:inset 0 5px 0 var(--pc),var(--bub)}
+#pqHost .lanes{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(190px,1fr);gap:16px;align-items:start;overflow-x:auto;padding:4px 14px 30px;margin:-4px -14px -14px}
+#pqHost .lane{background:var(--n-col);border-radius:28px;padding:14px 12px;min-width:0;display:flex;flex-direction:column;gap:12px;box-shadow:inset 0 5px 0 var(--pc),var(--bub)}
 #pqHost .lane.flash{outline:3px solid var(--pc)}
-#pqHost .lhead{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
-#pqHost .lhead h2{font:800 1.2rem var(--display);color:var(--pc)}
+#pqHost .lhead{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:2px 8px}
+#pqHost .lhead h2{font:800 1.2rem var(--display);color:var(--pc);white-space:nowrap}
 #pqHost .bar{display:flex;height:10px;border-radius:999px;overflow:hidden;background:var(--check);gap:2px}
 #pqHost .bar i{background:var(--pc);opacity:.8}
-#pqHost .batch{background:var(--surface);border:1px solid transparent;border-radius:20px;box-shadow:var(--bub-sm);padding:12px 14px;display:flex;flex-direction:column;gap:6px}
+#pqHost .batch{background:var(--surface);border:1px solid transparent;border-radius:20px;box-shadow:var(--bub-sm);padding:10px 12px;display:flex;flex-direction:column;gap:6px;min-width:0}
 #pqHost .batch.printing{border-color:var(--st-run);box-shadow:inset 4px 0 0 var(--st-run),var(--bub-sm)}
 #pqHost .batch.review{border-color:var(--st-ok)}
 #pqHost .batch.done{opacity:.7}
-#pqHost .bt{display:flex;gap:8px;align-items:center}
-#pqHost .bt input{flex:1;border:1px solid transparent;background:transparent;box-shadow:none;font:700 .95rem var(--body);padding:4px 8px;border-radius:12px}
+#pqHost .bt{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center}
+#pqHost .bt input{flex:1 1 130px;min-width:0;border:1px solid transparent;background:transparent;box-shadow:none;font:700 .95rem var(--body);padding:4px 8px;border-radius:12px}
 #pqHost .bt input:hover,#pqHost .bt input:focus{border-color:var(--line);background:var(--bg)}
 #pqHost .state{font:700 .72rem var(--body);padding:3px 10px;border-radius:999px;background:var(--check);color:var(--muted);white-space:nowrap}
 #pqHost .state.printing{background:var(--n-blue-bg);color:var(--st-run)}#pqHost .state.review{background:var(--n-green-bg);color:var(--st-ok)}
@@ -637,7 +637,7 @@ label.allto{display:flex;flex-direction:row;gap:6px;align-items:center;font-size
 <div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
 <div id="modalHost"></div>
 
-<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611101658","./orders.js":"./orders.js?v=2611101658","./printplan.js":"./printplan.js?v=2611101658","./inventory.js":"./inventory.js?v=2611101658","./collections.js":"./collections.js?v=2611101658"}}</script>
+<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611101933","./orders.js":"./orders.js?v=2611101933","./printplan.js":"./printplan.js?v=2611101933","./inventory.js":"./inventory.js?v=2611101933","./collections.js":"./collections.js?v=2611101933"}}</script>
 <script type="module">
 import * as db from "./supabase.js";
 import * as orders from "./orders.js";
