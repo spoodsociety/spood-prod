@@ -247,7 +247,7 @@ export function open(id, pmode = "adjust") { mode = "shelf"; openV = id; panelMo
 
 export function init() {
   host = document.getElementById("invHost"); if (!host) return;
-  host.innerHTML = `<div class="viewbar"><div class="viewtabs" role="group" aria-label="View"><button type="button" id="mShelf" data-mode="shelf" aria-pressed="true"><span aria-hidden="true">▦</span><span>Shelf view</span></button><button type="button" id="mList" data-mode="list" aria-pressed="false"><span aria-hidden="true">☰</span><span>List view</span></button></div><span style="flex:1"></span><span class="invact"><button type="button" class="btn ghost" id="collBtn">Collections</button><button type="button" class="btn" id="newItem">+ Add item</button></span></div>
+  host.innerHTML = `<div class="viewbar"><div class="viewtabs" role="group" aria-label="View"><button type="button" id="mShelf" data-mode="shelf" aria-pressed="true"><span aria-hidden="true">▦</span><span>Shelf view</span></button><button type="button" id="mList" data-mode="list" aria-pressed="false"><span aria-hidden="true">☰</span><span>List view</span></button></div><span style="flex:1"></span><span class="invact"><button type="button" class="btn ghost" id="backupBtn">Backup</button><button type="button" class="btn ghost" id="collBtn">Collections</button><button type="button" class="btn" id="newItem">+ Add item</button></span></div>
     <div class="filters" id="filters" role="group" aria-label="Show"></div>
     <div class="search"><input type="search" id="q" placeholder="Search item, color or size" aria-label="Search inventory"></div>
     <div class="body" id="shelf"><nav class="rail" id="rail" aria-label="Collections"></nav><div class="list" id="list"></div></div>
@@ -264,6 +264,7 @@ export function init() {
     if ((b = t.closest("[data-pstep]"))) { const v = D.V.find((x) => x.id === openV); if (!v) return; setCount(v, Math.max(0, (v.val || 0) + Number(b.dataset.pstep))); render(); return; }
     if ((b = t.closest("[data-cstep]"))) { const v = D.V.find((x) => x.id === b.dataset.id); const inp = host.querySelector("#n-" + CSS.escape(v.id)); const cur = inp && inp.value !== "" ? Number(inp.value) : v.stock || 0; setCount(v, Math.max(0, cur + Number(b.dataset.cstep))); const y = window.scrollY; render(); window.scrollTo(0, y); return; }
     if (t.closest("#newItem")) { newItem(); return; }
+    if (t.closest("#backupBtn")) { downloadBackup(t.closest("#backupBtn")); return; }
     if (t.closest("#collBtn")) { import("./collections.js").then((m) => m.open()); return; }
     if (t.closest("#pedit")) { const v = D.V.find((x) => x.id === openV); if (v) editItem(v); return; }
     if (t.closest("#close") || t.id === "scrim") { openV = null; render(); return; }
@@ -280,4 +281,23 @@ export function init() {
   host.querySelector("#q").addEventListener("input", render);
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && openV) { openV = null; render(); } });
   onChange(softRender); render();
+}
+
+/* ---------- Backup: the whole database as one dated JSON file on this device ---------- */
+let backingUp = false;
+async function downloadBackup(btn) {
+  if (backingUp) return;
+  backingUp = true; btn.disabled = true; btn.textContent = "Backing up…";
+  try {
+    const data = await db.backupData();
+    if (!data || !data.tables) throw new Error("The backup came back empty");
+    const d = new Date(), p = (n) => String(n).padStart(2, "0");
+    const name = `spood-backup-${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}.json`;
+    const url = URL.createObjectURL(new Blob([JSON.stringify(data)], { type: "application/json" }));
+    const a = document.createElement("a"); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    const c = data.counts || {};
+    toast(`Backup saved · ${plural(c.orders || 0, "order")}, ${plural(c.variants || 0, "item")}`);
+  } catch (e) { toast("⚠ Backup failed: " + db.errText(e), true); }
+  finally { backingUp = false; btn.disabled = false; btn.textContent = "Backup"; }
 }
