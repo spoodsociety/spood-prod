@@ -74,7 +74,9 @@ export async function reloadOrder(id) {
   catch (e) { store.err = db.errText(e); }
   emit();
 }
-export async function reloadInventory() { const started = Date.now(); try { const [inv, opts] = await Promise.all([db.inventoryRows(), db.catalogOptions()]); if (db.lastWriteAt() > started) return reloadInventory(); indexCatalog(opts); store.inv = Array.isArray(inv) ? inv : []; store.invById = new Map(store.inv.map((r) => [r.id, r])); recompute(); } catch (e) { store.err = db.errText(e); } emit(); }
+// One read for everything a count touches: the shelf counts and who each shelf piece is held for come from the same server answer,
+// so a change on one screen (a count, a line state, Done, a finalized stock batch) shows on every screen at once.
+export async function reloadInventory(catalog = true) { if (catalog) cat.stale = true; await load(); }
 
 /* ===================== order & line rules ===================== */
 export const isExpress = (o) => /express/i.test(o.ship_type || "");
@@ -189,7 +191,7 @@ export async function act(key, fn, { reload = null } = {}) {
   store.busy.add(key); setErr(key, ""); emit();
   try { await fn(); setErr(key, ""); return true; }
   catch (e) { const t = db.errText(e); setErr(key, t); console.error(e); return false; }
-  finally { store.busy.delete(key); if (reload) await reloadOrder(reload); else emit(); }
+  finally { store.busy.delete(key); if (reload) { await reloadOrder(reload); load(); } else emit(); } // then every other order and the counts: one line changing can move a shelf piece to another order
 }
 export const setLine = (orderId, uid, patch) => act("l:" + uid, () => db.setLineState([{ uid, ...patch }]), { reload: orderId });
 export const setLines = (orderId, lines) => act("o:" + orderId, () => db.setLineState(lines), { reload: orderId });
@@ -207,7 +209,6 @@ export async function setStatus(o, status) {
     // the server takes only what the shelf has (a count never goes below zero); anything it couldn't take is a count that was already wrong
     if (done && short.length) toast(`${o.customer} → Done. Shelf was already short, not taken: ${short.map((s) => `${s.wanted - s.taken} × ${s.item}`).join(", ")}. Recount those.`, true);
     else if (done) toast(`${o.customer} → Done${mv.length ? ". Took " + plural(mv.reduce((a, m) => a + m.qty, 0), "piece") + " off the shelf" : ""}`);
-    await reloadInventory();
     return done;
   }
   const ok = await act(key, () => db.saveWithRetry(o.id, (p) => ({ ...p, status })), { reload: o.id });
@@ -219,7 +220,7 @@ export async function undoDone(id) {
   const q = recentDone.find((x) => x.id === id); const o = store.orders.find((x) => x.id === id);
   const prev = (q && q.prev) || (o && o.done_prev); const status = prev && obPick(prev) !== "Done" ? obPick(prev) : "Not started";
   const ok = await act("o:" + id, () => db.saveWithRetry(id, (p) => ({ ...p, status }), { undo: true }), { reload: id });
-  if (ok) { const i = recentDone.findIndex((x) => x.id === id); if (i >= 0) recentDone.splice(i, 1); toast(((q && q.customer) || (o && o.customer) || "Order") + " is back on the board. Shelf pieces were put back"); await reloadInventory(); }
+  if (ok) { const i = recentDone.findIndex((x) => x.id === id); if (i >= 0) recentDone.splice(i, 1); toast(((q && q.customer) || (o && o.customer) || "Order") + " is back on the board. Shelf pieces were put back"); }
   else toast("Undo didn't save: " + (store.errs["o:" + id] || ""), true);
   return ok;
 }
@@ -231,6 +232,9 @@ let lastTouch = 0;
 document.addEventListener("pointerdown", () => { lastTouch = Date.now(); }, true);
 document.addEventListener("keydown", () => { lastTouch = Date.now(); }, true);
 export const uiBusy = () => { const a = document.activeElement; return !!(BIN.open || BIN.stOpen || F.form || document.querySelector(".obmodal") || (a && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName) && a.type !== "checkbox") || Date.now() - lastTouch < 4000); };
+// The 20 s refresh waits on the same things, but never for long: a cursor left in a search box or a menu left open must not freeze the counts.
+// An open form or dialog still holds it (it is being filled in); it catches up as soon as that closes.
+export const refreshHold = () => { if (F.form || document.querySelector(".obmodal")) return true; return uiBusy() && Date.now() - lastTouch < 45000; };
 try { BIN.layout = localStorage.getItem("spood.bin.layout") || "cols"; } catch (e) {}
 const SV = (d, cls) => `<span class="bvicon ${cls}" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg></span>`;
 const IC = { run: '<path d="M21 12a9 9 0 1 1-18 0a9 9 0 1 1 18 0z"/><path d="M12 7v5l3 2"/>', done: '<path d="M21 12a9 9 0 1 1-18 0a9 9 0 1 1 18 0z"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/>', shelf: '<path d="M3 7l9-4 9 4v10l-9 4-9-4z"/><path d="M3 7l9 4 9-4"/><path d="M12 11v10"/>', out: '<path d="M20 11a8 8 0 0 0-14.9-4"/><path d="M4 4v4h4"/><path d="M4 13a8 8 0 0 0 14.9 4"/><path d="M20 20v-4h-4"/>', shelfunit: '<path d="M4 3v18"/><path d="M20 3v18"/><path d="M4 9h16"/><path d="M4 15h16"/><path d="M4 21h16"/>',
@@ -504,7 +508,7 @@ function takeOpen(o, uid) {
     const mine = c.st === "shelf" ? { uid, print_state: "", print_src: "bin" } : { uid, print_state: c.st, print_src: "bin" };
     const theirs = { uid: c.l.uid, print_state: c.st === "shelf" ? "nostock" : "print", print_src: "bin" };
     const ok = await act("l:" + uid, () => db.setLineState([mine, theirs]));
-    await reloadOrder(o.id); await reloadOrder(c.o.id);
+    await reloadOrder(o.id); await reloadOrder(c.o.id); load();
     if (ok) toast(`Moved ${cleanText(l.text)} from ${c.o.customer} to ${o.customer}. ${c.o.customer}'s goes back to needs printing.`);
   });
 }
@@ -945,7 +949,7 @@ async function saveForm() {
     });
     F.busy = false;
     if (r && Array.isArray(r.duplicates) && r.duplicates.length) toast(`Saved. Order #${f.order_number} is also on: ${r.duplicates.map((d) => d.customer).join(", ")}`, true); else toast(`Saved ${f.customer.trim()}${r && r.unmatched ? ` · ${plural(r.unmatched, "line")} not in the catalog` : ""}`);
-    closeForm(); await reloadOrder(f.id); if (cat.stale) await loadCatalog();
+    closeForm(); await reloadOrder(f.id); if (cat.stale) await loadCatalog(); load();
   } catch (e) { F.busy = false; F.errors = [db.errText(e)]; formRender(); }
 }
 

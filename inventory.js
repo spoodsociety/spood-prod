@@ -14,6 +14,7 @@ let host = null;
 let mode = "shelf", filter = "all", coll = "all", LGROUP = "coll", openV = null, panelMode = "count";
 try { mode = localStorage.getItem("spood.inv.mode") === "list" ? "list" : "shelf"; LGROUP = localStorage.getItem("spood.inv.group") === "type" ? "type" : "coll"; } catch (e) {}
 const edits = new Map(); // id -> new count typed in list view (not saved yet)
+const bases = new Map(); // id -> the shelf count the person was looking at when they started that edit (sent as `expect`)
 const touched = new Set(); const OPENC = new Set(), OPENI = new Set();
 let saving = false;
 
@@ -34,7 +35,7 @@ const status = (v) => (!v.tracked ? "nt" : v.need > v.used ? "short" : (v.val ??
 const label = (v) => [v.size ? sizeLabel(v.size) : "", v.color].filter(Boolean).join(" · ") || "One style";
 const shortBy = (v) => Math.max(0, v.need - v.used);
 function passes(v) { const q = (host.querySelector("#q")?.value || "").trim().toLowerCase(); if (q && !(v.base + " " + v.size + " " + v.color + " " + v.coll).toLowerCase().includes(q)) return false; if (filter === "short") return status(v) === "short"; if (filter === "out") return v.tracked && (v.val ?? 0) === 0; if (filter === "changed") return edits.has(v.id); return true; }
-function setCount(v, raw) { if (raw === "" || raw == null) return; const n = Math.max(0, Math.round(Number(raw) || 0)); if (n === v.stock) edits.delete(v.id); else edits.set(v.id, n); touched.add(v.id); }
+function setCount(v, raw) { if (raw === "" || raw == null) return; const n = Math.max(0, Math.round(Number(raw) || 0)); if (n === v.stock) { edits.delete(v.id); bases.delete(v.id); } else { if (!bases.has(v.id)) bases.set(v.id, v.stock || 0); edits.set(v.id, n); } touched.add(v.id); }
 
 function renderFilters() { const c = { all: D.V.length, short: 0, out: 0, changed: edits.size }; D.V.forEach((v) => { const s = status(v); if (s === "short") c.short++; if (v.tracked && (v.val ?? 0) === 0) c.out++; }); host.querySelector("#filters").innerHTML = [["all", "All items", c.all, ""], ["short", "Short for orders", c.short, "short"], ["out", "Out of stock", c.out, "out"], ["changed", "Changed, not saved", c.changed, "low"]].map(([k, l, n, cls]) => `<button type="button" class="fchip ${cls}" data-filter="${k}" aria-pressed="${filter === k}"><b class="mono">${n}</b><span>${l}</span></button>`).join(""); }
 function renderRail() { const sb = {}, nb = {}; D.V.forEach((v) => { if (status(v) === "short") sb[v.coll] = (sb[v.coll] || 0) + 1; nb[v.coll] = (nb[v.coll] || 0) + 1; }); host.querySelector("#rail").innerHTML = [["all", "All collections"]].concat(D.COLLS.map((c) => [c, c])).map(([k, l]) => { const s = k === "all" ? Object.values(sb).reduce((a, b) => a + b, 0) : sb[k] || 0; return `<button type="button" data-coll="${esc(k)}" aria-current="${coll === k}"><span>${esc(l)}</span>${s ? `<span class="dot" title="${s} short for orders">${s}</span>` : `<span class="cnt">${k === "all" ? D.V.length : nb[k] || 0}</span>`}</button>`; }).join(""); }
@@ -86,21 +87,32 @@ export function render() {
   renderFilters(); if (mode === "shelf") { renderRail(); renderShelf(); } else renderList(); renderPanel();
 }
 let soon = null;
-function softRender() { clearTimeout(soon); const a = document.activeElement; if (a && host.contains(a) && a.matches("[data-count], #pcount, #q")) { soon = setTimeout(softRender, 600); return; } render(); }
+function softRender() { clearTimeout(soon); const a = document.activeElement; if (a && host.contains(a) && a.matches("[data-count], #pcount")) { soon = setTimeout(softRender, 600); return; } render(); }
 
 async function saveCounts(ids) {
-  const moves = ids.filter((id) => edits.has(id)).map((id) => ({ notion_id: id, kind: "count", qty: edits.get(id), reason: "Shelf count" }));
+  const moves = ids.filter((id) => edits.has(id)).map((id) => ({ notion_id: id, kind: "count", qty: edits.get(id), expect: bases.has(id) ? bases.get(id) : (store.invById.get(id) || {}).in_stock || 0, reason: "Shelf count" }));
   if (!moves.length) return; saving = true; render();
-  try { const res = await db.applyMoves(moves); for (const m of moves) { edits.delete(m.notion_id); touched.delete(m.notion_id); setErr("inv:" + m.notion_id, ""); } toast(`Saved ${plural(moves.length, "count")}${Array.isArray(res) && res.some((r) => r.status === "duplicate") ? " (some were already recorded)" : ""}`); }
+  try {
+    const res = await db.applyMoves(moves); const rows = Array.isArray(res) ? res : [];
+    // the shelf changed while this count was open (an order went Done, a batch was finalized): that count is kept on screen, not saved over the newer number
+    const moved = new Map(rows.filter((r) => r.status === "changed").map((r) => [r.notion_id, r.on_hand]));
+    for (const m of moves) {
+      if (moved.has(m.notion_id)) { bases.set(m.notion_id, moved.get(m.notion_id)); setErr("inv:" + m.notion_id, `Shelf is now ${moved.get(m.notion_id)}. Save again if ${m.qty} is right`); continue; }
+      edits.delete(m.notion_id); bases.delete(m.notion_id); touched.delete(m.notion_id); setErr("inv:" + m.notion_id, "");
+    }
+    const ok = moves.length - moved.size;
+    if (moved.size) toast(`⚠ ${plural(moved.size, "count")} not saved: the shelf changed while you were counting. Check and save again${ok ? ` (${ok} saved)` : ""}`, true);
+    else toast(`Saved ${plural(moves.length, "count")}${rows.some((r) => r.status === "duplicate") ? " (some were already recorded)" : ""}`);
+  }
   catch (e) { const t = db.errText(e); for (const m of moves) setErr("inv:" + m.notion_id, t); toast("⚠ Counts not saved: " + t, true); }
-  saving = false; await reloadInventory(); render();
+  saving = false; await reloadInventory(false); render();
 }
 async function saveAdjust(v, kind, qty, reason) {
   const n = Math.max(1, Math.min(99, Math.abs(Math.round(Number(qty) || 0)))); const neg = kind === "scrap" || kind === "adjust-"; kind = kind.replace(/-$/, ""); const signed = neg ? -n : n;
   saving = true; render();
   try { await db.applyMoves([{ notion_id: v.id, kind, qty: signed, reason: reason || null, ref: "inventory" }]); setErr("inv:" + v.id, ""); toast(`${v.item} ${label(v)}: ${signed > 0 ? "+" : ""}${signed} recorded`); }
   catch (e) { setErr("inv:" + v.id, db.errText(e)); }
-  saving = false; await reloadInventory(); render();
+  saving = false; await reloadInventory(false); render();
 }
 
 const addPill = (v) => { const it = D.ITEMS.find((x) => x.vars.includes(v)); return it ? `<div class="crow addrow"><button type="button" class="btn ghost mini" data-addvar="${esc(it.key)}">+ Add variation</button></div>` : ""; };
@@ -269,9 +281,9 @@ export function init() {
     if (t.closest("#pedit")) { const v = D.V.find((x) => x.id === openV); if (v) editItem(v); return; }
     if (t.closest("#close") || t.id === "scrim") { openV = null; render(); return; }
     if (t.closest("#psave")) { saveCounts([openV]); return; }
-    if (t.closest("#pundo")) { edits.delete(openV); touched.delete(openV); render(); return; }
+    if (t.closest("#pundo")) { edits.delete(openV); bases.delete(openV); touched.delete(openV); setErr("inv:" + openV, ""); render(); return; }
     if (t.closest("#csave")) { saveCounts([...edits.keys()]); return; }
-    if (t.closest("#cundo")) { edits.clear(); touched.clear(); render(); return; }
+    if (t.closest("#cundo")) { for (const id of edits.keys()) setErr("inv:" + id, ""); edits.clear(); bases.clear(); touched.clear(); render(); return; }
   });
   host.addEventListener("submit", (e) => { const f = e.target.closest("#adjForm"); if (!f) return; e.preventDefault(); const v = D.V.find((x) => x.id === openV); if (!v) return; saveAdjust(v, f.querySelector("#adjKind").value, f.querySelector("#adjQty").value, f.querySelector("#adjReason").value.trim()); });
   host.addEventListener("change", (e) => { if (e.target.id === "pcount") { const v = D.V.find((x) => x.id === openV); if (v) { setCount(v, e.target.value); render(); } } });

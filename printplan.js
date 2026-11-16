@@ -79,6 +79,8 @@ async function flush() {
   try {
     const r = await db.setAppState(KEY, JSON.parse(JSON.stringify({ v: 3, ...shared })), VERSION || 0);
     VERSION = r.version; pending = pending.slice(batch.length); saveErr = "";
+    const short = (r.stock && r.stock.short) || []; // a reopened stock batch whose pieces had already left the shelf
+    if (short.length) toast(`⚠ Recount ${short.map((x) => x.item).join(", ")}: the shelf had fewer than this batch added`, true);
     load(); // the save derived every line's print status server-side; show it
   } catch (e) {
     if (e instanceof db.RpcError && e.stale) {
@@ -116,7 +118,8 @@ const livePicks = (covered = coveredPieceIds()) => Object.entries(ui.picks).filt
 const pieceRun = (p) => { for (const { printer, batch: b } of allBatches()) { if (b.state !== B.PRINTING) continue; if (b.items.some((it) => it.pieceId === p.id)) return { printer, batch: b.name }; } return p.bin === "printing" ? { printer: 0 } : null; };
 const invRow = (spec) => (spec.inv ? store.invById.get(spec.inv) || null : null);
 const stockKey = (spec) => (spec.inv ? "inv:" + spec.inv : skuKey(spec));
-function stockFor(spec) { if (spec.custom) return null; const r = invRow(spec); const pend = state.pendingStock[stockKey(spec)]?.n || 0; if (!r) return pend ? { qty: pend } : null; if (r.in_stock == null) return { qty: pend || null, note: "not tracked" }; return { qty: Number(r.in_stock) + pend }; }
+// the shelf count is the same number Inventory and Bin View show; pieces still waiting in the pending list are not counted until they are added
+function stockFor(spec) { if (spec.custom) return null; const r = invRow(spec); if (!r) return null; if (r.in_stock == null) return { qty: null, note: "not tracked" }; return { qty: Number(r.in_stock) }; }
 const stockText = (st) => (st == null ? null : st.note || String(st.qty ?? 0));
 // sales over the last 7 days, from every order (any status)
 function sold7() { const since = addDays(isoDay(), -6); const byRow = {}, byGroup = {}; for (const o of store.orders) { if (!o.order_date || o.order_date < since) continue; for (const l of o.lines || []) { if (lineKind(l) !== "print") continue; const sp = lineSpec(l); const q = Number(l.qty) || 1; byGroup[groupKey(sp)] = (byGroup[groupKey(sp)] || 0) + q; if (sp.inv) byRow[sp.inv] = (byRow[sp.inv] || 0) + q; } } return { byRow, byGroup }; }
@@ -147,7 +150,7 @@ function restockRows(covered) {
   return store.inv.filter((r) => r.in_stock != null && !NOT_RESTOCKED.test(r.item) && !isCustom(r.item)).map((r) => {
     const sp = lineSpec({ notion_inventory_id: r.id });
     const x = { key: r.id, name: sp.name, size: sp.size, color: sp.color, spec: sp };
-    x.shelf = Math.max(0, Number(r.in_stock) || 0) + (state.pendingStock["inv:" + r.id]?.n || 0);
+    x.shelf = Math.max(0, Number(r.in_stock) || 0);
     x.owed = owed.get(r.id) || 0; x.queued = queued[r.id] || 0; x.sold7 = SALES.byRow[r.id] || 0; x.keep = Number(state.keep[r.id]) || 0;
     x.free = Math.max(0, x.shelf - x.owed) + x.queued; x.target = Math.max(x.keep, Math.ceil(x.sold7 * (state.restockWeeks || 0))); x.suggest = Math.max(0, x.target - x.free);
     return x;
@@ -224,16 +227,19 @@ const actions = {
   reprintItem(id, uid, printer) { printer = Number(printer); if (!printer) return; const at = locate(id); const it = at?.batch.items.find((i) => i.uid === uid); if (!it || it.outcome?.to !== "fail") return; queueReprint(it, printer, at.batch.name); return `Reprint queued on Printer ${printer}`; },
   setDest(id, uid, dest) { const it = locate(id)?.batch.items.find((i) => i.uid === uid); if (it) it.dest = dest; },
   finalize(id) {
-    const at = locate(id); if (!at) return; const tally = { piece: 0, stock: 0, fail: 0 };
+    const at = locate(id); if (!at || at.batch.state !== B.REVIEW) return; const tally = { piece: 0, stock: 0, fail: 0 };
     for (const it of at.batch.items) { const dest = it.dest || (it.pieceId ? "piece:" + it.pieceId : "stock");
       if (dest.startsWith("piece:")) { it.outcome = { to: "piece", pieceId: dest.slice(6) }; tally.piece++; }
-      else if (dest === "stock") { it.outcome = { to: "stock" }; tally.stock++; const k = stockKey(it.spec); const pe = (state.pendingStock[k] ||= { spec: { ...it.spec }, n: 0 }); pe.n++; }
+      else if (dest === "stock") { tally.stock++; const r = invRow(it.spec);
+        // a tracked item goes on the shelf count in this same save (hq.plan_stock_sync reads outcome.auto); anything Inventory has no row for waits in the pending list for a person
+        if (r && r.in_stock != null) it.outcome = { to: "stock", auto: true };
+        else { it.outcome = { to: "stock" }; const k = stockKey(it.spec); const pe = (state.pendingStock[k] ||= { spec: { ...it.spec }, n: 0 }); pe.n++; } }
       else { it.outcome = { to: "fail" }; tally.fail++; const ro = it.reprintOn ?? String(at.printer); if (ro !== "no") { queueReprint(it, Number(ro), at.batch.name); tally.re = (tally.re || 0) + 1; } }
       delete it.dest; }
     at.batch.state = B.DONE;
     return [tally.piece && `${tally.piece} to orders`, tally.stock && `${tally.stock} to stock`, tally.fail && (tally.re ? `${tally.fail} failed, ${tally.re} reprint queued` : `${tally.fail} failed`)].filter(Boolean).join(" · ") + ". Job finalized";
   },
-  reopen(id) { const at = locate(id); if (!at) return; for (const it of at.batch.items) { if (it.outcome?.to === "stock") { const k = stockKey(it.spec); if (state.pendingStock[k]) { state.pendingStock[k].n--; if (state.pendingStock[k].n <= 0) delete state.pendingStock[k]; } } if (it.outcome?.reprint) unqueueReprint(it.outcome.reprint); it.dest = it.outcome?.to === "piece" ? "piece:" + it.outcome.pieceId : it.outcome?.to; delete it.outcome; } at.batch.state = B.REVIEW; at.batch.items.forEach((it) => { it.dest ||= it.pieceId ? "piece:" + it.pieceId : "stock"; }); return "Reopened. Change where pieces go, then finalize again"; },
+  reopen(id) { const at = locate(id); if (!at || at.batch.state !== B.DONE) return; for (const it of at.batch.items) { if (it.outcome?.to === "stock" && !it.outcome.auto) { const k = stockKey(it.spec); if (state.pendingStock[k]) { state.pendingStock[k].n--; if (state.pendingStock[k].n <= 0) delete state.pendingStock[k]; } } if (it.outcome?.reprint) unqueueReprint(it.outcome.reprint); it.dest = it.outcome?.to === "piece" ? "piece:" + it.outcome.pieceId : it.outcome?.to; delete it.outcome; } at.batch.state = B.REVIEW; at.batch.items.forEach((it) => { it.dest ||= it.pieceId ? "piece:" + it.pieceId : "stock"; }); return "Reopened. Change where pieces go, then finalize again"; },
   removeItem(id, uid) { const at = locate(id); if (!at) return; const it = at.batch.items.find((i) => i.uid === uid); if (!it) return; at.batch.items = at.batch.items.filter((i) => i.uid !== uid); if (it.pieceId) delete ui.picks[it.pieceId]; if (!at.batch.items.length && it.pieceId) at.list.splice(at.index, 1); return it.pieceId ? "Sent back to Needs printing" : "Removed stock piece"; },
   newStockBatch(printer) { const batch = { id: nextId("b"), name: "", state: B.QUEUED, items: [] }; batch.name = "Stock batch " + state.seq; state.lanes[printer].push(batch); ui.stockFormFor = batch.id; },
   addPiece(id, pieceId) { const at = locate(id); const pc = PIECE_BY_ID.get(pieceId); if (!at || !pc) return; if (coveredPieceIds().has(pieceId)) return "That piece is already queued or printed"; at.batch.items.push({ uid: pieceId, pieceId, spec: specOf(pc), hours: pc.hours }); delete ui.picks[pieceId]; return `Added ${customerOf(pieceId)}’s ${pc.name} to ${at.batch.name}`; },
@@ -477,7 +483,7 @@ const CLICK = { showOrder: (d) => showOrder(d.piece),
   commitGo: () => { const picks = livePicks(); if (!picks.length) { toast("Pick a printer for at least one piece first"); return; } dispatch("commitPicks", picks); ui.picks = {}; ui.view = "queues"; persistUi(); render(); },
   clearPicks: () => uiSet(() => { ui.picks = {}; }),
   undo: () => undo(),
-  unprint: async (d, el) => { el.disabled = true; const L = LINE_BY_UID.get(d.line); try { await db.setLineState([{ uid: d.line, print_state: "print", print_src: "bin" }]); } catch (e) { toast("⚠ " + db.errText(e), true); } if (L) await reloadOrder(L.o.id); },
+  unprint: async (d, el) => { el.disabled = true; const L = LINE_BY_UID.get(d.line); try { await db.setLineState([{ uid: d.line, print_state: "print", print_src: "bin" }]); } catch (e) { toast("⚠ " + db.errText(e), true); } if (L) { await reloadOrder(L.o.id); load(); } },
   addPiece: (d, el) => { const s = el.closest(".sform")?.querySelector("[data-act=addPieceSel]"); if (!s || !s.value) { toast("Choose a piece first"); return; } dispatch("addPiece", d.batch, s.value); },
   dupItem: (d) => dispatch("dupItem", d.batch, d.uid),
   addToInventory: (d) => addToInventory(d.key),

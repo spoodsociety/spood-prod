@@ -637,7 +637,7 @@ label.allto{display:flex;flex-direction:row;gap:6px;align-items:center;font-size
 <div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
 <div id="modalHost"></div>
 
-<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611102246","./orders.js":"./orders.js?v=2611102246","./printplan.js":"./printplan.js?v=2611102246","./inventory.js":"./inventory.js?v=2611102246","./collections.js":"./collections.js?v=2611102246"}}</script>
+<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611161215","./orders.js":"./orders.js?v=2611161215","./printplan.js":"./printplan.js?v=2611161215","./inventory.js":"./inventory.js?v=2611161215","./collections.js":"./collections.js?v=2611161215"}}</script>
 <script type="module">
 import * as db from "./supabase.js";
 import * as orders from "./orders.js";
@@ -709,7 +709,7 @@ orders.load({ done: true }); // Done orders (the bulk, rarely changing) arrive i
 const refreshAll = async (all = false) => { await orders.load({ done: all === true }); await plan.loadPlan(); }; // orders first: the plan's Bin View sync trusts a plan copy only when it is newer than the orders
 document.getElementById("refreshBtn").onclick = () => refreshAll(true);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") refreshAll(); });
-setInterval(() => { if (document.visibilityState === "visible" && !orders.uiBusy()) refreshAll(); }, 20000);
+setInterval(() => { if (document.visibilityState === "visible" && !orders.refreshHold()) refreshAll(); }, 20000);
 window.addEventListener("beforeunload", (e) => { if (plan.planPending()) { e.preventDefault(); e.returnValue = ""; } });
 
 // a tab left open runs old code after a deploy and would keep disagreeing with newer tabs: when a newer version is published, reload once the person is idle
