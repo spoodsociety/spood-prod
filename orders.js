@@ -628,7 +628,7 @@ const isEncLine = (l) => (l.kind === "pick" ? l.product_id === "enclosure" : isE
 /* ===================== order form (new / edit) ===================== */
 const PLATFORMS = () => [...new Set(["Etsy", "Shopify", "TikTok", "TikTok - LIVE", "In person", ...store.orders.flatMap((o) => o.platform || [])])];
 const F = { form: null, orig: null, errors: [], review: null, busy: false, focus: null, custOpen: false };
-const blank = (pre = {}) => ({ id: null, version: null, customer: "", handle: "", platform: [], order_number: "", shipping_number: "", order_date: isoDay(), ship_by: "", ship_type: "Standard", status: "Not started", important: "", summary: "", state: "", collection: "", choices: {}, lines: [], ...pre });
+const blank = (pre = {}) => ({ id: null, version: null, customer: "", handle: "", platform: [], order_number: "", shipping_number: "", order_date: isoDay(), ship_by: "", ship_type: "Standard", status: "Not started", important: "", summary: "", state: "", collection: "", choices: {}, need: [], lines: [], ...pre });
 const fromOrder = (o) => {
   const lines = [...(o.lines || [])].sort((a, b) => a.line_no - b.line_no).map(lineFromSaved);
   const coll = (o.collections || []).map((n) => [...cat.colls.values()].find((c) => c.name === n || c.id === n)).filter(Boolean)[0];
@@ -755,7 +755,8 @@ function formDraw(f, host) {
   const enc = encSize(f); const encP = cat.byProduct.get("enclosure"); const encSizes = encP ? encP.size_codes || [] : [];
   const colls = [...cat.colls.values()].filter((c) => !c.archived).sort((a, b) => a.name.localeCompare(b.name));
   const coll = f.collection ? cat.colls.get(f.collection) : null;
-  const choices = coll ? (enc ? coll.enclosure_choices : coll.choices) || {} : {};
+  const choices = { ...(coll ? (enc ? coll.enclosure_choices : coll.choices) || {} : {}) };
+  const need = coll ? f.need || [] : []; need.forEach((k) => { if (!choices[k]) choices[k] = (coll.enclosure_choices || {})[k] || []; });
   const addons = (cat.opts.products || []).filter((p) => p.addon != null ? p.addon : /^(Add-on|Kit|Supply)$/.test(p.category || "")).sort((a, b) => a.name.localeCompare(b.name)); // products.addon flags the bar; category only for a catalog read before that flag existed
   host.innerHTML = `<div class="od">
     <div class="grid2">
@@ -779,7 +780,7 @@ function formDraw(f, host) {
     ${encSizes.length ? `<div><div class="lbl">Enclosure</div><div class="seg" role="group" aria-label="Enclosure"><button type="button" data-enc="" aria-pressed="${!enc}">None</button>${encSizes.map((s) => `<button type="button" data-enc="${esc(s.code)}" aria-pressed="${enc === s.code}">${esc(s.name)}</button>`).join("")}</div>${enc && encDoors(enc).length > 1 ? `<div class="seg" role="group" aria-label="Door" style="margin-left:8px">${encDoors(enc).map((d) => `<button type="button" data-door="${esc(d)}" aria-pressed="${encDoorOf(f) === d}">${d === "magnetic" ? "Magnetic" : "Latch"}</button>`).join("")}</div>` : ""}</div>` : ""}
     <div class="grid2">
       <label class="f">Collection<select data-f="collection"><option value="">None</option>${colls.map((c) => `<option value="${esc(c.id)}" ${c.id === f.collection ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label>
-      ${Object.keys(choices).map((k) => `<div><div class="lbl">${esc(k)}</div><div class="pills">${(choices[k] || []).map((o) => `<button type="button" data-choice="${esc(k)}" data-opt="${esc(o)}" aria-pressed="${(f.choices[k] || (coll.defaults || {})[k]) === o}">${esc(o)}</button>`).join("")}</div></div>`).join("")}
+      ${Object.keys(choices).map((k) => `<div><div class="lbl">${esc(k)}</div><div class="pills${need.includes(k) ? " srcmiss" : ""}" role="group" aria-label="${esc(k)}">${(choices[k] || []).map((o) => `<button type="button" data-choice="${esc(k)}" data-opt="${esc(o)}" aria-pressed="${(f.choices[k] || (coll.defaults || {})[k]) === o}">${esc(o)}</button>`).join("")}</div></div>`).join("")}
     </div>
     ${addons.length ? `<div><div class="lbl">Add-ons</div><div class="pills">${addons.map((p) => `<button type="button" class="add" data-addon="${esc(p.id)}">${esc(p.name)}</button>`).join("")}</div></div>` : ""}
     <div class="row"><h3>Items <span class="sub">(${plural(pieces, "piece")})</span></h3>${f.lines.length ? `<button type="button" class="btn ghost mini" data-act="clearItems">Clear items</button>` : ""}</div>
@@ -824,6 +825,9 @@ async function applyCollection(f) {
   const coll = f.collection ? cat.colls.get(f.collection) : null; if (!coll) return;
   const enc = encSize(f); const door = encDoorOf(f); const form = enc && coll.sells_enclosure ? "enclosure" : coll.sells_accessory_set ? "accessory" : "enclosure";
   const choices = { ...(form === "enclosure" ? coll.defaults || {} : {}), ...f.choices };
+  // a choice with no default (Floor) waits for the person: the collection stays picked, its pills show, and its pieces are added once every choice is made
+  f.need = Object.keys((form === "enclosure" ? coll.enclosure_choices : coll.choices) || {}).filter((k) => !choices[k]);
+  if (f.need.length) return false;
   const res = await db.pickCollection({ collection: coll.id, form, size: enc || undefined, choices });
   const fresh = (res.lines || []).map((x) => { const c = x.color_scheme_id ? schemeColors(x.color_scheme_id) : { c1: "", c2: "" }; return { kind: "pick", product_id: x.product_id, size_code: x.size || (x.product_id === "enclosure" ? enc : undefined), c1: c.c1, c2: c.c2, option_code: x.product_id === "enclosure" && encDoors(x.size || enc).includes(door) ? door : x.option || "standard", qty: Number(x.qty) || 1, note: "", untracked: false, src: x.product_id === "enclosure" ? "enclosure" : "collection" }; })
     .map((l) => ({ ...l, size_code: l.size_code || defaultSize(cat.byProduct.get(l.product_id) || {}, enc) }));
@@ -867,7 +871,7 @@ function wireForm(host, custs) {
   host.onchange = async (e) => { const t = e.target; if (F.drawing) return;
     if (t.matches("[data-f='collection']")) { const prev = f.collection; read(); const next = f.collection; f.collection = prev;
       if (next && f.lines.some((l) => l.src !== "collection" && l.src !== "enclosure") && !(await confirmBox({ title: "Replace the items?", body: "The collection's pieces replace what's listed now.", ok: "Replace" }))) { formRender(); return; }
-      f.collection = next; f.choices = {}; if (!next) f.lines = f.lines.filter((l) => l.src !== "collection"); else { f.lines = f.lines.filter((l) => l.src === "collection" || l.src === "enclosure"); try { await applyCollection(f); } catch (x) { f.collection = prev; toast(db.errText(x), true); } } formRender(); return; }
+      f.collection = next; f.choices = {}; f.need = []; if (!next) f.lines = f.lines.filter((l) => l.src !== "collection"); else { f.lines = f.lines.filter((l) => l.src === "collection" || l.src === "enclosure"); try { if ((await applyCollection(f)) === false) f.lines = f.lines.filter((l) => l.src !== "collection"); } catch (x) { f.collection = prev; f.need = []; toast(db.errText(x), true); } } formRender(); return; }
     if (t.matches("[data-f],[data-l]")) { read(); if (t.dataset.lf && !["qty", "note", "size_1", "size_2", "size_3"].includes(t.dataset.lf)) formRender(); } if (t.matches("[data-r]")) { const l = F.review.lines[+t.dataset.r]; const k = t.dataset.rf; if (k === "qty") l.line.qty = Math.max(1, +t.value || 1); } };
   host.ontoggle = (e) => { if (e.target.matches("[data-custfold]")) F.custOpen = e.target.open; };
   host.onclick = async (e) => {
@@ -875,7 +879,7 @@ function wireForm(host, custs) {
     if ((b = t.closest("[data-plat]"))) { read(); const p = b.dataset.plat; f.platform = f.platform.includes(p) ? f.platform.filter((x) => x !== p) : [...f.platform, p]; formRender(); return; }
     if ((b = t.closest("[data-door]"))) { read(); setDoor(f, b.dataset.door); formRender(); return; }
     if ((b = t.closest("[data-enc]"))) { read(); setEnclosure(f, b.dataset.enc); if (f.collection) { try { await applyCollection(f); } catch (x) { toast(db.errText(x), true); } } formRender(); return; }
-    if ((b = t.closest("[data-choice]"))) { read(); f.choices = { ...f.choices, [b.dataset.choice]: b.dataset.opt }; try { await applyCollection(f); } catch (x) { toast(db.errText(x), true); } formRender(); return; }
+    if ((b = t.closest("[data-choice]"))) { read(); f.choices = { ...f.choices, [b.dataset.choice]: b.dataset.opt }; F.errors = F.errors.filter((x) => x !== `Pick the ${b.dataset.choice.toLowerCase()}`); try { await applyCollection(f); } catch (x) { toast(db.errText(x), true); } formRender(); return; }
     if ((b = t.closest("[data-addon]"))) { read(); f.lines.push(pickLine(b.dataset.addon, { src: "addon", tag: "addon" })); formRender(); return; }
     if ((b = t.closest("[data-reorder]"))) { read(); const o = store.orders.find((x) => x.id === b.dataset.reorder); if (!o) return; const lines = [...(o.lines || [])].sort((x, y) => x.line_no - y.line_no).map(lineFromSaved).map((l) => ({ ...l, uid: undefined, group_uid: null, print_state: undefined, packed: undefined, src: "repeat" }));
       if (f.lines.length && !(await confirmBox({ title: "Replace the items?", body: "The past order's items replace what's listed now.", ok: "Replace" }))) return; f.lines = lines; formRender(); return; }
@@ -899,6 +903,7 @@ function wireForm(host, custs) {
 }
 function validate(f) {
   const errs = []; if (!f.customer.trim()) errs.push("Add the customer's name"); if (!f.platform.length) errs.push("Pick the platform the order came from"); if (!f.ship_by) errs.push("Pick a ship-by date"); if (!f.lines.length) errs.push("Add at least one item");
+  if (f.collection && !f.id) (f.need || []).forEach((k) => errs.push(`Pick the ${k.toLowerCase()}`)); // a new order can't be saved with a collection still waiting on a choice
   f.lines.forEach((l, i) => { if (l.kind === "text" && !String(l.text).trim()) errs.push(`Line ${i + 1} has no text`); if (l.kind === "pick" && l.size_code === "custom" && !(Number(l.size_1) > 0)) errs.push(`Line ${i + 1}: custom size needs its measurements`); if (l.kind === "pick" && !l.size_code && ((cat.byProduct.get(l.product_id) || {}).size_codes || []).length > 1) errs.push(`Line ${i + 1}: pick a size`); });
   return errs;
 }
