@@ -591,10 +591,11 @@ export function pickState(l) {
   if (v) return { status: "variant", v, name: v.name, size, scheme };
   if (opt !== "standard") return { status: "unresolved", reason: "option not offered", option: opt };
   const offered = (id) => pc.s1.includes(id) || pc.s2.includes(id);
-  if (c1 && !(cat.variants.some((x) => x.product_id === p.id && x.color_scheme_id === scheme) || (((p.offered || {})["1"] || []).length + ((p.offered || {})["2"] || []).length > 0 && offered(c1) && (!c2 || offered(c2))))) return { status: "unresolved", reason: "color not offered", size, scheme };
+  // a color this piece isn't listed in yet: the person picking it here is the decision to make it; saving records the color as offered
+  const offer = !!(c1 && !(cat.variants.some((x) => x.product_id === p.id && x.color_scheme_id === scheme) || (((p.offered || {})["1"] || []).length + ((p.offered || {})["2"] || []).length > 0 && offered(c1) && (!c2 || offered(c2)))));
   const parts = [size !== "standard" ? sizeName(p, size) : "", scheme !== "standard" ? (cat.schemes.get(scheme) || {}).name || [colorName(c1), colorName(c2)].filter(Boolean).join(" + ") : ""].filter(Boolean);
-  const prefix = (cat.variants.find((x) => x.product_id === p.id && x.name && x.name.includes(" (")) || {}).name; const base = prefix ? prefix.split(" (")[0] : (cat.variants.find((x) => x.product_id === p.id) || {}).name || p.name;
-  return { status: "creatable", name: base + (parts.length ? ` (${parts.join(", ")})` : ""), size, scheme };
+  const prefix = (cat.variants.find((x) => x.product_id === p.id && x.name && x.name.includes(" (")) || {}).name; const base = prefix ? prefix.replace(/\s*\((?:[^()]|\([^()]*\))*\)\s*$/, "") : (cat.variants.find((x) => x.product_id === p.id) || {}).name || p.name;
+  return { status: "creatable", name: base + (parts.length ? ` (${parts.join(", ")})` : ""), size, scheme, offer };
 }
 // the order's words against the pick (mirrors hq.line_check; the server has the last word on save): "Text says Large", "Text says Hot Pink", or ""
 function textCheck(said, l, p) {
@@ -914,7 +915,7 @@ async function linesForSave(ff, make = true) {
     const o = { qty: Number(l.qty) || 1 }; if (l.uid) o.uid = l.uid; if (l.tag) o.tag = l.tag; if (l.note && l.note.trim()) o.note = l.note.trim(); if (l.group_uid && uids.has(l.group_uid)) o.group_uid = l.group_uid;
     if (l.kind === "pick") {
       let st = pickState(l);
-      if (st.status === "creatable" && make) { const r = await db.pickVariant({ product_id: l.product_id, size_code: st.size, color_1: l.c1 || null, color_2: l.c2 || null, option_code: l.option_code || "standard", make: true }); if (r && r.status === "variant") { st = { status: "variant", name: r.name, v: { id: r.variant_id } }; invalidateCatalog(); } else throw new Error(`${(cat.byProduct.get(l.product_id) || {}).name || l.product_id}: ${pickWord({ status: "unresolved", ...(r || {}) }) || (r && r.error) || "couldn't be added to the catalog"}`); }
+      if (st.status === "creatable" && make) { const r = await db.pickVariant({ product_id: l.product_id, size_code: st.size, color_1: l.c1 || null, color_2: l.c2 || null, option_code: l.option_code || "standard", make: true, ...(st.offer ? { offer: true } : {}) }); if (r && r.status === "variant") { st = { status: "variant", name: r.name, v: { id: r.variant_id } }; invalidateCatalog(); } else throw new Error(`${(cat.byProduct.get(l.product_id) || {}).name || l.product_id}: ${pickWord({ status: "unresolved", ...(r || {}) }) || (r && r.error) || "couldn't be added to the catalog"}`); }
       // the line's text is what the order said; the catalog name only when the line never had words (the server checks the pick against the words)
       if (st.status === "variant") { o.text = l.said || st.name; o.variant_id = st.v.id; }
       else { const p = cat.byProduct.get(l.product_id) || { name: l.product_id }; const parts = [l.size_code && l.size_code !== "standard" ? sizeName(p, l.size_code) : "", [colorName(l.c1), colorName(l.c2)].filter(Boolean).join(" + ")].filter(Boolean); o.text = l.said || p.name + (parts.length ? ` (${parts.join(", ")})` : ""); }

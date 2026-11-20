@@ -228,7 +228,7 @@ export async function addToCatalog(pre = {}, onDone = null) {
     const colorLabel = [c1, c2].filter(Boolean).join(" + ");
     const coll = isNew ? q("#acColl").value : (p && p.collections && p.collections.length ? collName(p.collections[0]) : "");
     // the piece's existing inventory-name prefix, from this product's own variants (as hq.pick_variant does); a sku prefix test would also match cloud-ledge-w-bat for cloud-ledge
-    const base = isNew ? `${coll ? coll + " - " : ""}${name}` : (((opts.variants || []).find((v) => v.product_id === p.id && v.name) || {}).name || `${coll ? coll + " - " : ""}${name}`).split(" (")[0];
+    const base = isNew ? `${coll ? coll + " - " : ""}${name}` : (((opts.variants || []).find((v) => v.product_id === p.id && v.name) || {}).name || `${coll ? coll + " - " : ""}${name}`).replace(/\s*\((?:[^()]|\([^()]*\))*\)\s*$/, "");
     const inventory_name = `${base} (${[size === "Standard" ? "" : size, colorLabel].filter(Boolean).join(", ")})`.replace(/ \(\)$/, "");
     const dup = store.inv.find((r) => r.item.toLowerCase() === inventory_name.toLowerCase()); if (dup) { m.close(); if (onDone) onDone(dup.id, dup.item); return; }
     const isNewFlags = isNew ? ["product", "size"] : []; if (!isNew && p && !(p.sizes || []).includes(size)) isNewFlags.push("size"); for (const c of [c1, c2]) if (c && !colors.includes(c)) isNewFlags.push("color:" + c);
