@@ -3,11 +3,13 @@ import * as db from "./supabase.js";
 import { $, esc, plural, store, onChange, owed, rowParts, sizeLabel, sizeOptions, toast, modal, reloadInventory, setErr, shipBy, fmtDay, cleanText, invRowOf, eff, lineKind, loadCatalog, invalidateCatalog, cat } from "./orders.js";
 
 const PRODUCT_ORDER = ["Cosmic", "Galaxy", "Gothic", "Haunted", "Neon Halloween", "Woodland", "Yeti", "Ocean", "Christmas", "Celestial Bat"];
-const TAIL = ["Floor Inserts", "Hides", "Supplies"];
+const TAIL = ["Floor Inserts", "No collection", "Supplies"];
+const TYPE_ORDER = ["Hide", "Ledge", "Climb", "Floor Insert", "Insert", "Figure", "Part", "Enclosure", "Add-on", "Supply", "Kit", "Set"];
 const SIZE_ORDER = ["Mini", "Sling Size", "Small", "Standard", "Large", "", "Custom", ""];
 const sizeRank = (s) => { const i = SIZE_ORDER.indexOf(s); return i < 0 ? 5 : s ? i : 7; }; // a size not listed sorts after Large
-const typeOf = (n) => (/climb|wall|tree|tower/i.test(n) ? "Wall climbs" : /floor|insert|substrate|wrap|panel/i.test(n) ? "Floor inserts" : /ledge|rock|cloud|window|bat\b/i.test(n) ? "Ledges" : /enclosure|kit|feeder|bowl/i.test(n) ? "Supplies" : "Hides");
-function collOf(r, type) { const c = r.collection || ""; if (/^floor/i.test(c) || (type === "Floor inserts" && (!c || c === "Natural"))) return "Floor Inserts"; if (!c || c === "Natural" || c === "Other") return type === "Supplies" ? "Supplies" : "Hides"; return c; }
+// An item's type is the one set in Items (inventory_rows.category). Guessing it from the name is only for a row read before that field was there.
+const typeOf = (r) => r.category || (/climb|wall|tree|tower/i.test(r.item) ? "Climb" : /floor|insert|substrate|wrap|panel/i.test(r.item) ? "Floor Insert" : /ledge|rock|cloud|window|bat\b/i.test(r.item) ? "Ledge" : /enclosure|kit|feeder|bowl/i.test(r.item) ? "Supply" : "Hide");
+function collOf(r, type) { const c = r.collection || ""; if (/^floor/i.test(c) || (type === "Floor Insert" && (!c || c === "Natural"))) return "Floor Inserts"; if (!c || c === "Natural" || c === "Other") return /^(Supply|Add-on|Kit|Set|Enclosure)$/.test(type) ? "Supplies" : "No collection"; return c; }
 function itemName(base, coll) { let n = base; for (const pre of [coll, ...PRODUCT_ORDER, "Floor Insert", "Floor"]) { const m = n.match(new RegExp("^" + pre.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\s*-\\s*(.+)$", "i")); if (m) { n = m[1]; break; } } return n.trim() || base; }
 
 let host = null;
@@ -20,7 +22,7 @@ let saving = false;
 
 function committedTo(r) { const out = []; for (const o of store.open) for (const l of o.lines || []) { if (l.notion_inventory_id !== r.id) continue; const e = eff(l); if (e.st === "shelf" || (e.st === "packed" && e.from === "shelf") || e.a) out.push({ customer: o.customer, qty: e.a || Number(l.qty) || 1, shipBy: shipBy(o) }); } return out; }
 function build() {
-  const V = store.inv.map((r) => { const sp = rowParts(r); const type = typeOf(r.item); const c = collOf(r, type); const item = r.product ? sp.base : itemName(sp.base, c); const need = owed.get(r.id) || 0; const stock = r.in_stock; const used = stock == null ? 0 : Math.min(Math.max(0, stock), need);
+  const V = store.inv.map((r) => { const sp = rowParts(r); const type = typeOf(r); const c = collOf(r, type); const item = r.product ? sp.base : itemName(sp.base, c); const need = owed.get(r.id) || 0; const stock = r.in_stock; const used = stock == null ? 0 : Math.min(Math.max(0, stock), need);
     return { id: r.id, r, item, base: sp.base, size: sp.size, color: sp.color, coll: c, type, stock, val: edits.has(r.id) ? edits.get(r.id) : stock, need, used, tracked: stock != null }; });
   const by = new Map(); const ITEMS = [];
   V.forEach((v) => { const k = v.r.product_id ? "p|" + v.r.product_id : v.coll + "|" + v.item.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+hide$/, "").trim(); if (!by.has(k)) { by.set(k, { key: k, name: v.item, coll: v.coll, type: v.type, vars: [] }); ITEMS.push(by.get(k)); } const it = by.get(k); if (v.item.length > it.name.length) it.name = v.item; it.vars.push(v); });
@@ -44,11 +46,11 @@ function renderShelf() {
   const list = D.ITEMS.filter((it) => coll === "all" || it.coll === coll).map((it) => ({ it, vs: it.vars.filter(passes) })).filter((x) => x.vs.length);
   const by = {}; list.forEach((x) => (by[x.it.coll] ||= []).push(x)); const keys = D.COLLS.filter((c) => by[c]);
   host.querySelector("#list").innerHTML = keys.length ? keys.map((c) => { const xs = by[c]; const pcs = xs.reduce((a, x) => a + x.it.vars.reduce((s, v) => s + Math.max(0, v.val || 0), 0), 0);
-    return `<section class="coll"><h2>${esc(c)} <small>${plural(xs.length, "item")} · ${pcs} on shelf</small></h2><div class="items">` + xs.map(({ it, vs }) => `<div class="item"><div class="iname"><button type="button" class="ilink" data-edititem="${esc(it.vars[0].id)}">${esc(it.name)}</button><small>${esc(it.type.replace(/s$/, "").replace(/^Supplie$/, "Supply"))}${it.vars.length > 1 ? " · " + it.vars.length + " variations" : ""}</small></div><div class="tiles">${vs.map(tile).join("")}<button type="button" class="tile add" data-addvar="${esc(it.key)}" aria-label="Add a color or size of ${esc(it.name)}"><span class="tl">+ Add a color<br>or size</span></button></div><div class="itot"><b class="mono">${it.vars.reduce((s, v) => s + Math.max(0, v.val || 0), 0)}</b><small>on shelf</small></div></div>`).join("") + `</div></section>`; }).join("") : `<p class="sub">Nothing matches. Clear the search or pick "All items".</p>`;
+    return `<section class="coll"><h2>${esc(c)} <small>${plural(xs.length, "item")} · ${pcs} on shelf</small></h2><div class="items">` + xs.map(({ it, vs }) => `<div class="item"><div class="iname"><button type="button" class="ilink" data-edititem="${esc(it.vars[0].id)}">${esc(it.name)}</button><small>${esc(it.type)}${it.vars.length > 1 ? " · " + it.vars.length + " variations" : ""}</small></div><div class="tiles">${vs.map(tile).join("")}<button type="button" class="tile add" data-addvar="${esc(it.key)}" aria-label="Add a color or size of ${esc(it.name)}"><span class="tl">+ Add a color<br>or size</span></button></div><div class="itot"><b class="mono">${it.vars.reduce((s, v) => s + Math.max(0, v.val || 0), 0)}</b><small>on shelf</small></div></div>`).join("") + `</div></section>`; }).join("") : `<p class="sub">Nothing matches. Clear the search or pick "All items".</p>`;
 }
 function renderList() {
   const vs = D.ITEMS.flatMap((it) => it.vars).filter((v) => v.tracked && passes(v)); const searching = !!((host.querySelector("#q")?.value || "").trim() || filter !== "all");
-  const TYPES = ["Hides", "Wall climbs", "Ledges", "Floor inserts", "Supplies"]; const gk = (v) => (LGROUP === "coll" ? v.coll : v.type); const secs = {}; vs.forEach((v) => (secs[gk(v)] ||= []).push(v));
+  const TYPES = [...TYPE_ORDER, ...[...new Set(vs.map((v) => v.type))].filter((t) => !TYPE_ORDER.includes(t)).sort()]; const gk = (v) => (LGROUP === "coll" ? v.coll : v.type); const secs = {}; vs.forEach((v) => (secs[gk(v)] ||= []).push(v));
   const why = (v) => { const t = []; if (v.used > 0) t.push(`${v.used} committed · ${Math.max(0, (v.val || 0) - v.used)} free`); if (v.need > v.used) t.push(`${v.need - v.used} short for orders`); return t.length ? `<span class="sub">${t.join(" · ")}</span>` : ""; };
   const step = (v) => `<span class="cstep"><button type="button" data-cstep="-1" data-id="${esc(v.id)}" aria-label="One less">−</button><input id="n-${esc(v.id)}" data-count="${esc(v.id)}" inputmode="numeric" value="${v.val ?? ""}" aria-label="On the shelf: ${esc(v.item + " " + label(v))}"><button type="button" data-cstep="1" data-id="${esc(v.id)}" aria-label="One more">+</button></span>`;
   const rowOf = (v, nested) => `<div class="crow${edits.has(v.id) ? " done" : ""}"><span class="clab">${nested ? `<b>${esc(label(v))}</b>` : `<b>${esc(v.item)}</b>${label(v) !== "One style" ? ` <span class="sub">${esc(label(v))}</span>` : ""}`} ${why(v)}</span><span class="was mono">was ${v.stock ?? "–"}</span>${step(v)}</div>`;
@@ -63,7 +65,7 @@ function renderPanel() {
   if (!v) { openV = null; panel.innerHTML = ""; panel.hidden = true; scrim.hidden = true; return; }
   const it = D.ITEMS.find((x) => x.vars.includes(v)); const s = status(v); const sh = s === "short" ? shortBy(v) : 0; const com = committedTo(v.r); const err = store.errs["inv:" + v.id];
   panel.hidden = false; scrim.hidden = false;
-  panel.innerHTML = `<div class="ptop"><div><div class="sub">${esc(it.coll)} · ${esc(it.type.replace(/s$/, "").replace(/^Supplie$/, "Supply"))}</div><h3>${esc(it.name)}</h3></div><span><button type="button" class="btn ghost mini" id="pedit">Edit</button> <button type="button" class="x" id="close" aria-label="Close">✕</button></span></div>
+  panel.innerHTML = `<div class="ptop"><div><div class="sub">${esc(it.coll)} · ${esc(it.type)}</div><h3>${esc(it.name)}</h3></div><span><button type="button" class="btn ghost mini" id="pedit">Edit</button> <button type="button" class="x" id="close" aria-label="Close">✕</button></span></div>
     ${it.vars.length > 1 ? `<div class="pvars" role="group" aria-label="Variation">${it.vars.map((x) => `<button type="button" data-v="${esc(x.id)}" aria-current="${x.id === v.id}">${esc(label(x))} · ${x.tracked ? x.stock : "–"}</button>`).join("")}</div>` : ""}
     <div class="sub" style="text-align:center;font-weight:700">${esc(label(v))}${v.r.sku ? ` · <span class="mono">${esc(v.r.sku)}</span>` : ""}</div>
     ${!v.tracked ? `<div class="sub" style="text-align:center">This item isn't tracked, so it has no shelf count.</div>` : `
@@ -129,7 +131,7 @@ async function addVariation(it) {
   let opts; try { opts = await options(); } catch (e) { card.innerHTML = `<h3>Add a color or size</h3><p class="err">⚠ ${esc(db.errText(e))}</p><div class="row"><button type="button" class="btn ghost" data-close>Close</button></div>`; card.querySelector("[data-close]").onclick = m.close; return; }
   const prod = productOf(it, opts); const v0 = it.vars[0];
   const collName = v0.r.collection || (prod && prod.collections && prod.collections.length ? ((opts.collections || []).find((c) => c.id === prod.collections[0]) || {}).name : "") || "";
-  const twoColors = (prod && prod.category === "Floor Insert") || /floor|checker/i.test(it.name + " " + v0.base);
+  const twoColors = prod ? prod.category === "Floor Insert" || (((prod.offered || {})["2"] || []).length > 0) || it.vars.some((v) => / \+ /.test(v.color)) : /floor|checker/i.test(it.name); // what the catalog says; the name is only read when the piece isn't in the catalog read
   const sizes = prod ? prod.sizes || [] : [...new Set(it.vars.map((v) => v.size).filter(Boolean))]; // sizes this piece already has
   const colors = (opts.colors || []).map((c) => c.name).sort((a, b) => a.localeCompare(b));
   const existing = new Set(it.vars.map((v) => (sizeLabel(v.size || "Standard") + "|" + (v.color || "")).toLowerCase()));
