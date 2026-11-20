@@ -1,6 +1,6 @@
 // Inventory: shelf view (tiles per variation), list view (end-of-day count), counts and adjustments through apply_moves.
 import * as db from "./supabase.js";
-import { $, esc, plural, store, onChange, owed, splitName, sizeLabel, sizeOptions, toast, modal, reloadInventory, setErr, shipBy, fmtDay, cleanText, invRowOf, eff, lineKind, loadCatalog, invalidateCatalog } from "./orders.js";
+import { $, esc, plural, store, onChange, owed, splitName, sizeLabel, sizeOptions, toast, modal, reloadInventory, setErr, shipBy, fmtDay, cleanText, invRowOf, eff, lineKind, loadCatalog, invalidateCatalog, cat } from "./orders.js";
 
 const PRODUCT_ORDER = ["Cosmic", "Galaxy", "Gothic", "Haunted", "Neon Halloween", "Woodland", "Yeti", "Ocean", "Christmas", "Celestial Bat"];
 const TAIL = ["Floor Inserts", "Hides", "Supplies"];
@@ -44,7 +44,7 @@ function renderShelf() {
   const list = D.ITEMS.filter((it) => coll === "all" || it.coll === coll).map((it) => ({ it, vs: it.vars.filter(passes) })).filter((x) => x.vs.length);
   const by = {}; list.forEach((x) => (by[x.it.coll] ||= []).push(x)); const keys = D.COLLS.filter((c) => by[c]);
   host.querySelector("#list").innerHTML = keys.length ? keys.map((c) => { const xs = by[c]; const pcs = xs.reduce((a, x) => a + x.it.vars.reduce((s, v) => s + Math.max(0, v.val || 0), 0), 0);
-    return `<section class="coll"><h2>${esc(c)} <small>${plural(xs.length, "item")} · ${pcs} on shelf</small></h2><div class="items">` + xs.map(({ it, vs }) => `<div class="item"><div class="iname"><b>${esc(it.name)}</b><small>${esc(it.type.replace(/s$/, "").replace(/^Supplie$/, "Supply"))}${it.vars.length > 1 ? " · " + it.vars.length + " variations" : ""}</small></div><div class="tiles">${vs.map(tile).join("")}<button type="button" class="tile add" data-addvar="${esc(it.key)}" aria-label="Add a color or size of ${esc(it.name)}"><span class="tl">+ Add a color<br>or size</span></button></div><div class="itot"><b class="mono">${it.vars.reduce((s, v) => s + Math.max(0, v.val || 0), 0)}</b><small>on shelf</small></div></div>`).join("") + `</div></section>`; }).join("") : `<p class="sub">Nothing matches. Clear the search or pick "All items".</p>`;
+    return `<section class="coll"><h2>${esc(c)} <small>${plural(xs.length, "item")} · ${pcs} on shelf</small></h2><div class="items">` + xs.map(({ it, vs }) => `<div class="item"><div class="iname"><button type="button" class="ilink" data-edititem="${esc(it.vars[0].id)}">${esc(it.name)}</button><small>${esc(it.type.replace(/s$/, "").replace(/^Supplie$/, "Supply"))}${it.vars.length > 1 ? " · " + it.vars.length + " variations" : ""}</small></div><div class="tiles">${vs.map(tile).join("")}<button type="button" class="tile add" data-addvar="${esc(it.key)}" aria-label="Add a color or size of ${esc(it.name)}"><span class="tl">+ Add a color<br>or size</span></button></div><div class="itot"><b class="mono">${it.vars.reduce((s, v) => s + Math.max(0, v.val || 0), 0)}</b><small>on shelf</small></div></div>`).join("") + `</div></section>`; }).join("") : `<p class="sub">Nothing matches. Clear the search or pick "All items".</p>`;
 }
 function renderList() {
   const vs = D.ITEMS.flatMap((it) => it.vars).filter((v) => v.tracked && passes(v)); const searching = !!((host.querySelector("#q")?.value || "").trim() || filter !== "all");
@@ -240,7 +240,12 @@ export async function addToCatalog(pre = {}, onDone = null) {
   };
 }
 
-/* ---------- Edit an item: name and note (update_variant), or remove it (archive_variant, only at 0 on the shelf) ---------- */
+/* ---------- Edit an item: the whole piece in the item editor (items.js). The small name/note dialog below is only the fallback for an item the catalog read doesn't list. ---------- */
+async function editPiece(v, focus) {
+  let pid = null; try { await loadCatalog(); pid = (cat.varByNotion.get(v.id) || {}).product_id || null; if (!pid) { await loadCatalog(true); pid = (cat.varByNotion.get(v.id) || {}).product_id || null; } } catch (e) { toast("⚠ " + db.errText(e), true); return; }
+  if (!pid) return editItem(v);
+  (await import("./items.js")).open({ product: pid, focus: focus ? v.id : null });
+}
 function editItem(v) {
   const m = modal(`<h3>Edit item</h3><form class="addvar"><div class="srow"><label style="flex:1 1 100%">Name<input id="eName" value="${esc(v.r.item)}" required></label></div>
     <div class="srow"><label style="flex:1 1 100%">Note<input id="eNote" value="${esc(v.r.note || "")}" placeholder="Optional"></label></div>
@@ -259,7 +264,7 @@ export function open(id, pmode = "adjust") { mode = "shelf"; openV = id; panelMo
 
 export function init() {
   host = document.getElementById("invHost"); if (!host) return;
-  host.innerHTML = `<div class="viewbar"><div class="viewtabs" role="group" aria-label="View"><button type="button" id="mShelf" data-mode="shelf" aria-pressed="true"><span aria-hidden="true">▦</span><span>Shelf view</span></button><button type="button" id="mList" data-mode="list" aria-pressed="false"><span aria-hidden="true">☰</span><span>List view</span></button></div><span style="flex:1"></span><span class="invact"><button type="button" class="btn ghost" id="backupBtn">Backup</button><button type="button" class="btn ghost" id="collBtn">Collections</button><button type="button" class="btn" id="newItem">+ Add item</button></span></div>
+  host.innerHTML = `<div class="viewbar"><div class="viewtabs" role="group" aria-label="View"><button type="button" id="mShelf" data-mode="shelf" aria-pressed="true"><span aria-hidden="true">▦</span><span>Shelf view</span></button><button type="button" id="mList" data-mode="list" aria-pressed="false"><span aria-hidden="true">☰</span><span>List view</span></button></div><span style="flex:1"></span><span class="invact"><button type="button" class="btn ghost" id="backupBtn">Backup</button><button type="button" class="btn ghost" id="collBtn">Collections</button><button type="button" class="btn ghost" id="itemsBtn">Items</button><button type="button" class="btn" id="newItem">+ Add item</button></span></div>
     <div class="filters" id="filters" role="group" aria-label="Show"></div>
     <div class="search"><input type="search" id="q" placeholder="Search item, color or size" aria-label="Search inventory"></div>
     <div class="body" id="shelf"><nav class="rail" id="rail" aria-label="Collections"></nav><div class="list" id="list"></div></div>
@@ -278,7 +283,9 @@ export function init() {
     if (t.closest("#newItem")) { newItem(); return; }
     if (t.closest("#backupBtn")) { downloadBackup(t.closest("#backupBtn")); return; }
     if (t.closest("#collBtn")) { import("./collections.js").then((m) => m.open()); return; }
-    if (t.closest("#pedit")) { const v = D.V.find((x) => x.id === openV); if (v) editItem(v); return; }
+    if (t.closest("#itemsBtn")) { import("./items.js").then((m) => m.open()); return; }
+    if ((b = t.closest("[data-edititem]"))) { const v = D.V.find((x) => x.id === b.dataset.edititem); if (v) editPiece(v, false); return; }
+    if (t.closest("#pedit")) { const v = D.V.find((x) => x.id === openV); if (v) editPiece(v, true); return; }
     if (t.closest("#close") || t.id === "scrim") { openV = null; render(); return; }
     if (t.closest("#psave")) { saveCounts([openV]); return; }
     if (t.closest("#pundo")) { edits.delete(openV); bases.delete(openV); touched.delete(openV); setErr("inv:" + openV, ""); render(); return; }

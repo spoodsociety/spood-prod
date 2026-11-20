@@ -39,7 +39,7 @@ export class RpcError extends Error {
 export const errText = (e) => (e instanceof RpcError ? e.message : String((e && e.message) || e || "Something went wrong"));
 
 /* when this tab last wrote: a read that started before a write and finished after it is older than what the screen shows, and is thrown away */
-const READS = new Set(["read_orders", "inventory_rows", "catalog_options", "resolve_lines", "read_app_state", "pick_collection", "read_collections", "backup_data"]);
+const READS = new Set(["read_orders", "inventory_rows", "catalog_options", "resolve_lines", "read_app_state", "pick_collection", "read_collections", "read_item", "backup_data"]);
 let writeAt = 0;
 export const lastWriteAt = () => writeAt;
 export async function rpc(fn, args = {}) {
@@ -65,6 +65,9 @@ export const pickCollection = (p) => rpc("pick_collection", { p });
 // collections: every collection (retired too) with its pieces; save one with its whole piece list (atomic, checked by the database)
 export const readCollections = () => rpc("read_collections");
 export const saveCollection = (p) => rpc("save_collection", { p: { op_id: opId("coll"), ...p }, p_by: me() || null });
+// items: one piece with its sizes, offered colors, variations and learned order wording; save_item checks and saves all of it at once
+export const readItem = (id) => rpc("read_item", { p_id: id });
+export const saveItem = (p) => rpc("save_item", { p: { op_id: opId("item"), ...p }, p_by: me() || null });
 export const updateVariant = async (p) => { const r = await rpc("update_variant", { p }); return Array.isArray(r) ? r[0] : r; };
 export const archiveVariant = (id) => rpc("archive_variant", { p_id: id });
 // sales as the platform reported them (hq.source_orders): the ones with no order yet; confirm an imported order's review; link a sale to an order

@@ -529,6 +529,21 @@ label.allto{display:flex;flex-direction:row;gap:6px;align-items:center;font-size
 .ce-x{flex:0 0 auto;width:38px;height:38px;border-radius:50%;border:0;background:transparent;color:var(--muted);font-size:1.3rem;cursor:pointer}.ce-x:hover{background:var(--bad-soft);color:var(--bad)}
 .ce-flags{align-items:center}.ce .ce-flags label{flex:1 1 130px}.ce .ce-flags label.ce-def{flex:0 0 auto;min-width:0}.ce-def span{display:flex;align-items:center;gap:6px;padding:8px 0;color:var(--fg)}
 .ce .err{margin:10px 0}.ce-foot{margin-top:14px;flex-wrap:wrap}
+.ie-field{display:flex;flex-direction:column;gap:4px;margin:4px 0 10px}.ie-field>span{font-size:.8rem;color:var(--muted)}
+.ie-chips{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.ie-chip{display:inline-flex;align-items:center;gap:2px;font-size:.84rem;background:var(--bg);border:1.5px solid var(--line);border-radius:999px;padding:3px 4px 3px 12px;color:var(--fg);overflow-wrap:anywhere}
+.ie-chip button{flex:0 0 auto;border:0;background:transparent;color:var(--muted);font-size:1.05rem;line-height:1;width:26px;height:26px;border-radius:50%;cursor:pointer}.ie-chip button:hover{background:var(--bad-soft);color:var(--bad)}
+.ie .ie-chips input,.ie .ie-chips select{flex:1 1 150px;min-width:130px;max-width:260px;border-radius:999px;padding:6px 12px}
+.ie .ce-line label.ie-num{flex:0 1 96px;min-width:84px}.ie .ce-line label.ie-sn{flex:1 1 120px}.ie .ce-line label.ie-prof{flex:2 1 150px}
+.ie .ce-line input,.ie .ce-line select{min-width:0;width:100%}
+.ie-det{margin:12px 0}.ie-det>summary{cursor:pointer;font:800 1rem var(--display);padding:4px 0}.ie-det>summary .sub{font:600 .8rem var(--body)}
+.ce-row .ie-det{margin:0}.ce-row .ie-det>summary{font:600 .8rem var(--body);color:var(--muted)}
+.ie-det>.ie-chips,.ie-det>.ie-field,.ie-det>.ce-rows{margin-top:8px}
+.ie-facts{font-size:.76rem;overflow-wrap:anywhere}
+.ie-gone{opacity:.75;border-style:dashed}.ie-gone .ce-line{align-items:center;justify-content:space-between}.ie-gname{overflow-wrap:anywhere}
+.ie-here{border-color:var(--accent)}
+.ie-q{margin-bottom:10px}.ie-q input{width:100%;font:inherit;padding:9px 14px;border-radius:999px;border:1.5px solid var(--line);background:var(--bg);color:var(--fg)}
+#invHost .iname .ilink{font:inherit;font-weight:700;color:inherit;background:none;border:0;padding:0;text-align:left;cursor:pointer;overflow-wrap:anywhere}#invHost .iname .ilink:hover{color:var(--accent);text-decoration:underline}
 .addvar .srow{display:flex;flex-wrap:wrap;gap:10px}.addvar label{display:flex;flex-direction:column;gap:4px;font-size:.8rem;color:var(--muted);min-width:140px;flex:1}.addvar select,.addvar input{font:inherit;padding:8px 10px;border-radius:8px;border:1.5px solid var(--line);background:var(--bg);color:var(--fg)}.addvar .err{color:var(--bad);min-height:1.2em;margin:8px 0 0}
 #invHost .tile .need{color:var(--bad);font-weight:700}
 #invHost .tile .held{color:var(--muted)}
@@ -637,7 +652,7 @@ label.allto{display:flex;flex-direction:row;gap:6px;align-items:center;font-size
 <div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
 <div id="modalHost"></div>
 
-<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611161252","./orders.js":"./orders.js?v=2611161252","./printplan.js":"./printplan.js?v=2611161252","./inventory.js":"./inventory.js?v=2611161252","./collections.js":"./collections.js?v=2611161252"}}</script>
+<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611191903","./orders.js":"./orders.js?v=2611191903","./printplan.js":"./printplan.js?v=2611191903","./inventory.js":"./inventory.js?v=2611191903","./collections.js":"./collections.js?v=2611191903","./items.js":"./items.js?v=2611191903"}}</script>
 <script type="module">
 import * as db from "./supabase.js";
 import * as orders from "./orders.js";
