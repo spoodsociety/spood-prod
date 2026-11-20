@@ -1,6 +1,6 @@
 // Inventory: shelf view (tiles per variation), list view (end-of-day count), counts and adjustments through apply_moves.
 import * as db from "./supabase.js";
-import { $, esc, plural, store, onChange, owed, splitName, sizeLabel, sizeOptions, toast, modal, reloadInventory, setErr, shipBy, fmtDay, cleanText, invRowOf, eff, lineKind, loadCatalog, invalidateCatalog, cat } from "./orders.js";
+import { $, esc, plural, store, onChange, owed, rowParts, sizeLabel, sizeOptions, toast, modal, reloadInventory, setErr, shipBy, fmtDay, cleanText, invRowOf, eff, lineKind, loadCatalog, invalidateCatalog, cat } from "./orders.js";
 
 const PRODUCT_ORDER = ["Cosmic", "Galaxy", "Gothic", "Haunted", "Neon Halloween", "Woodland", "Yeti", "Ocean", "Christmas", "Celestial Bat"];
 const TAIL = ["Floor Inserts", "Hides", "Supplies"];
@@ -20,10 +20,10 @@ let saving = false;
 
 function committedTo(r) { const out = []; for (const o of store.open) for (const l of o.lines || []) { if (l.notion_inventory_id !== r.id) continue; const e = eff(l); if (e.st === "shelf" || (e.st === "packed" && e.from === "shelf") || e.a) out.push({ customer: o.customer, qty: e.a || Number(l.qty) || 1, shipBy: shipBy(o) }); } return out; }
 function build() {
-  const V = store.inv.map((r) => { const sp = splitName(r.item, r.size); const type = typeOf(r.item); const c = collOf(r, type); const item = itemName(sp.base, c); const need = owed.get(r.id) || 0; const stock = r.in_stock; const used = stock == null ? 0 : Math.min(Math.max(0, stock), need);
+  const V = store.inv.map((r) => { const sp = rowParts(r); const type = typeOf(r.item); const c = collOf(r, type); const item = r.product ? sp.base : itemName(sp.base, c); const need = owed.get(r.id) || 0; const stock = r.in_stock; const used = stock == null ? 0 : Math.min(Math.max(0, stock), need);
     return { id: r.id, r, item, base: sp.base, size: sp.size, color: sp.color, coll: c, type, stock, val: edits.has(r.id) ? edits.get(r.id) : stock, need, used, tracked: stock != null }; });
   const by = new Map(); const ITEMS = [];
-  V.forEach((v) => { const k = v.coll + "|" + v.item.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+hide$/, "").trim(); if (!by.has(k)) { by.set(k, { key: k, name: v.item, coll: v.coll, type: v.type, vars: [] }); ITEMS.push(by.get(k)); } const it = by.get(k); if (v.item.length > it.name.length) it.name = v.item; it.vars.push(v); });
+  V.forEach((v) => { const k = v.r.product_id ? "p|" + v.r.product_id : v.coll + "|" + v.item.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+hide$/, "").trim(); if (!by.has(k)) { by.set(k, { key: k, name: v.item, coll: v.coll, type: v.type, vars: [] }); ITEMS.push(by.get(k)); } const it = by.get(k); if (v.item.length > it.name.length) it.name = v.item; it.vars.push(v); });
   ITEMS.forEach((it) => { it.vars.forEach((v) => (v.item = it.name)); it.vars.sort((a, b) => sizeRank(a.size) - sizeRank(b.size) || String(a.color).localeCompare(String(b.color))); });
   ITEMS.sort((a, b) => a.name.localeCompare(b.name));
   const present = new Set(V.map((v) => v.coll));
@@ -34,7 +34,7 @@ let D = { V: [], ITEMS: [], COLLS: [] };
 const status = (v) => (!v.tracked ? "nt" : v.need > v.used ? "short" : (v.val ?? 0) <= 0 ? "out" : "ok");
 const label = (v) => [v.size ? sizeLabel(v.size) : "", v.color].filter(Boolean).join(" · ") || "One style";
 const shortBy = (v) => Math.max(0, v.need - v.used);
-function passes(v) { const q = (host.querySelector("#q")?.value || "").trim().toLowerCase(); if (q && !(v.base + " " + v.size + " " + v.color + " " + v.coll).toLowerCase().includes(q)) return false; if (filter === "short") return status(v) === "short"; if (filter === "out") return v.tracked && (v.val ?? 0) === 0; if (filter === "changed") return edits.has(v.id); return true; }
+function passes(v) { const q = (host.querySelector("#q")?.value || "").trim().toLowerCase(); if (q && !(v.base + " " + v.size + " " + v.color + " " + v.coll + " " + (v.r.aka || "")).toLowerCase().includes(q)) return false; if (filter === "short") return status(v) === "short"; if (filter === "out") return v.tracked && (v.val ?? 0) === 0; if (filter === "changed") return edits.has(v.id); return true; }
 function setCount(v, raw) { if (raw === "" || raw == null) return; const n = Math.max(0, Math.round(Number(raw) || 0)); if (n === v.stock) { edits.delete(v.id); bases.delete(v.id); } else { if (!bases.has(v.id)) bases.set(v.id, v.stock || 0); edits.set(v.id, n); } touched.add(v.id); }
 
 function renderFilters() { const c = { all: D.V.length, short: 0, out: 0, changed: edits.size }; D.V.forEach((v) => { const s = status(v); if (s === "short") c.short++; if (v.tracked && (v.val ?? 0) === 0) c.out++; }); host.querySelector("#filters").innerHTML = [["all", "All items", c.all, ""], ["short", "Short for orders", c.short, "short"], ["out", "Out of stock", c.out, "out"], ["changed", "Changed, not saved", c.changed, "low"]].map(([k, l, n, cls]) => `<button type="button" class="fchip ${cls}" data-filter="${k}" aria-pressed="${filter === k}"><b class="mono">${n}</b><span>${l}</span></button>`).join(""); }
@@ -152,7 +152,7 @@ async function addVariation(it) {
     const colorLabel = [c1, c2].filter(Boolean).join(" + ");
     if (existing.has((sizeLabel(size) + "|" + colorLabel).toLowerCase())) return err(`${label({ size, color: colorLabel })} is already on the shelf.`);
     const isNew = []; if (!sizes.includes(size)) isNew.push("size"); for (const c of [c1, c2]) if (c && !colors.includes(c)) isNew.push("color:" + c);
-    const inventory_name = `${v0.base} (${[size === "Standard" ? "" : size, colorLabel].filter(Boolean).join(", ")})`.replace(/ \(\)$/, "");
+    const inventory_name = `${prod ? prod.name : v0.base} (${[size === "Standard" ? "" : size, colorLabel].filter(Boolean).join(", ")})`.replace(/ \(\)$/, "");
     const payload = { product: prod ? prod.name : it.name, collection: collName || null, size, color_1: c1 || null, color_2: c2 || null, inventory_name, new: isNew };
     const btn = q("#avSave"); btn.disabled = true; btn.textContent = "Adding…";
     let r; try { r = await db.addVariant(payload); } catch (x) { btn.disabled = false; btn.textContent = "Add"; return err(db.errText(x)); }
@@ -183,7 +183,7 @@ async function newItem() {
     const name = q("#nName").value.trim(), coll = val("nColl"), cat = q("#nCat").value, size = val("nSize"), c1 = val("nC1"), c2 = cat === "Floor Insert" ? val("nC2") : ""; const n = Math.max(0, Math.round(Number(q("#nCount").value) || 0));
     if (!name) return err("Give it a name."); if (!size) return err("Pick or type a size."); if (c2 && !c1) return err("Pick Color 1 first.");
     const colorLabel = [c1, c2].filter(Boolean).join(" + ");
-    const inventory_name = `${coll ? coll + " - " : ""}${name} (${[size === "Standard" ? "" : size, colorLabel].filter(Boolean).join(", ")})`.replace(/ \(\)$/, "");
+    const inventory_name = `${name} (${[size === "Standard" ? "" : size, colorLabel].filter(Boolean).join(", ")})`.replace(/ \(\)$/, "");
     if (store.inv.some((r) => r.item.toLowerCase() === inventory_name.toLowerCase())) return err(`${inventory_name} is already in Inventory.`);
     const isNew = ["product", "size"]; if (coll && !colls.includes(coll)) isNew.push("collection"); for (const c of [c1, c2]) if (c && !colors.includes(c)) isNew.push("color:" + c);
     const btn = q("#nSave"); btn.disabled = true; btn.textContent = "Adding…";
@@ -227,9 +227,7 @@ export async function addToCatalog(pre = {}, onDone = null) {
     const size = val("acSize"), c1 = val("acC1"), c2 = q("#acC2wrap").hidden ? "" : val("acC2"); if (!size) return err("Pick or type a size."); if (c2 && !c1) return err("Pick Color 1 first.");
     const colorLabel = [c1, c2].filter(Boolean).join(" + ");
     const coll = isNew ? q("#acColl").value : (p && p.collections && p.collections.length ? collName(p.collections[0]) : "");
-    // the piece's existing inventory-name prefix, from this product's own variants (as hq.pick_variant does); a sku prefix test would also match cloud-ledge-w-bat for cloud-ledge
-    const base = isNew ? `${coll ? coll + " - " : ""}${name}` : (((opts.variants || []).find((v) => v.product_id === p.id && v.name) || {}).name || `${coll ? coll + " - " : ""}${name}`).replace(/\s*\((?:[^()]|\([^()]*\))*\)\s*$/, "");
-    const inventory_name = `${base} (${[size === "Standard" ? "" : size, colorLabel].filter(Boolean).join(", ")})`.replace(/ \(\)$/, "");
+    const inventory_name = `${name} (${[size === "Standard" ? "" : size, colorLabel].filter(Boolean).join(", ")})`.replace(/ \(\)$/, "");
     const dup = store.inv.find((r) => r.item.toLowerCase() === inventory_name.toLowerCase()); if (dup) { m.close(); if (onDone) onDone(dup.id, dup.item); return; }
     const isNewFlags = isNew ? ["product", "size"] : []; if (!isNew && p && !(p.sizes || []).includes(size)) isNewFlags.push("size"); for (const c of [c1, c2]) if (c && !colors.includes(c)) isNewFlags.push("color:" + c);
     const btn = q("#acSave"); btn.disabled = true; btn.textContent = "Adding…";
@@ -240,20 +238,20 @@ export async function addToCatalog(pre = {}, onDone = null) {
   };
 }
 
-/* ---------- Edit an item: the whole piece in the item editor (items.js). The small name/note dialog below is only the fallback for an item the catalog read doesn't list. ---------- */
+/* ---------- Edit an item: the whole piece in the item editor (items.js). The small note dialog below is only the fallback for an item the catalog read doesn't list. ---------- */
 async function editPiece(v, focus) {
   let pid = null; try { await loadCatalog(); pid = (cat.varByNotion.get(v.id) || {}).product_id || null; if (!pid) { await loadCatalog(true); pid = (cat.varByNotion.get(v.id) || {}).product_id || null; } } catch (e) { toast("⚠ " + db.errText(e), true); return; }
   if (!pid) return editItem(v);
   (await import("./items.js")).open({ product: pid, focus: focus ? v.id : null });
 }
 function editItem(v) {
-  const m = modal(`<h3>Edit item</h3><form class="addvar"><div class="srow"><label style="flex:1 1 100%">Name<input id="eName" value="${esc(v.r.item)}" required></label></div>
+  const m = modal(`<h3>${esc(v.r.item)}</h3><form class="addvar">
     <div class="srow"><label style="flex:1 1 100%">Note<input id="eNote" value="${esc(v.r.note || "")}" placeholder="Optional"></label></div>
     <p class="err" id="eErr"></p><div class="row"><button type="submit" class="btn accent" id="eSave">Save</button><button type="button" class="btn ghost" data-close>Cancel</button><span style="flex:1"></span><button type="button" class="btn ghost" id="eDel">Remove item</button></div></form>`, { label: "Edit item" });
   const q = (s) => m.el.querySelector(s); const err = (t) => { q("#eErr").textContent = t || ""; };
   q("[data-close]").onclick = m.close;
   q("form").onsubmit = async (e) => { e.preventDefault(); err(""); q("#eSave").disabled = true;
-    try { await db.updateVariant({ id: v.id, inventory_name: q("#eName").value.trim(), note: q("#eNote").value, updated_at: v.r.updated_at }); m.close(); toast("Saved " + q("#eName").value.trim()); await reloadInventory(); render(); }
+    try { await db.updateVariant({ id: v.id, note: q("#eNote").value, updated_at: v.r.updated_at }); m.close(); toast("Saved " + v.r.item); await reloadInventory(); render(); }
     catch (x) { err(db.errText(x)); q("#eSave").disabled = false; } };
   q("#eDel").onclick = async () => { if (q("#eDel").dataset.sure !== "1") { q("#eDel").dataset.sure = "1"; q("#eDel").textContent = "Tap again to remove"; return; } err("");
     try { await db.archiveVariant(v.id); m.close(); toast("Removed " + v.r.item); openV = null; await reloadInventory(); render(); }

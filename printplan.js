@@ -1,7 +1,7 @@
 // Print Plan: assign pieces to printers, commit, run batches, finalize. Line states save to order_lines (set_line_state);
 // the queue layout and settings save to app_state key printplan2/main (set_app_state).
 import * as db from "./supabase.js";
-import { $, esc, plural, isoDay, addDays, NO_DATE, store, onChange, load, alloc, owed, free, lineKind, lineSpec, isCustom, shipBy, isExpress, rank, sizeLabel, toast, confirmBox, reloadOrder, reloadInventory, cleanText, setErr, fmtSize, cardHtml, modal, openOrderForm, splitName } from "./orders.js";
+import { $, esc, plural, isoDay, addDays, NO_DATE, store, onChange, load, alloc, owed, free, lineKind, lineSpec, isCustom, shipBy, isExpress, rank, sizeLabel, toast, confirmBox, reloadOrder, reloadInventory, cleanText, setErr, fmtSize, cardHtml, modal, openOrderForm, rowParts } from "./orders.js";
 
 const KEY = "printplan2/main";
 const PRINTERS = [1, 2, 3, 4, 5, 6];
@@ -29,7 +29,14 @@ const hoursFor = (name, size, inv) => savedHours(name, size, inv) || estimateHou
 let ORDERS = [], ORDER_BY_ID = new Map(), PIECE_BY_ID = new Map(), LINE_BY_UID = new Map(), CATALOG_ITEMS = [], CATALOG_COLORS = [];
 const orderOf = (pid) => ORDER_BY_ID.get(PIECE_BY_ID.get(pid)?.orderId);
 const customerOf = (pid) => orderOf(pid)?.customer || "";
+// A queued or printed piece shows the catalog's current item, size and color: an item renamed in Items is renamed here too, and groups with its open pieces.
+function syncSpecs() {
+  const fix = (s) => { const r = s && s.inv ? store.invById.get(s.inv) : null; if (!r || !r.product) return; const p = rowParts(r); s.name = p.base; s.size = p.size; s.color = p.color; };
+  for (const lane of Object.values(state.lanes || {})) for (const b of lane || []) for (const it of b.items || []) fix(it.spec);
+  for (const p of Object.values(state.pendingStock || {})) fix(p && p.spec);
+}
 function rebuildCatalog() {
+  syncSpecs();
   const orders = []; LINE_BY_UID = new Map();
   for (const o of store.open) {
     const pieces = [];
@@ -198,7 +205,7 @@ function groupRows(covered) {
    Every batch that reached a printer says where that item goes and how many fit on a plate. Auto-plan makes one batch per item + size + color
    (how batches are run by hand), on the least busy of the printers that item usually runs on, soonest ship date first.
    A piece that has never been printed, a custom size, a shelf piece and a piece already picked by hand are left alone. */
-const histKey = (spec) => { const r = spec.inv ? store.invById.get(spec.inv) : null; return norm(r && r.name ? splitName(r.name, r.size).base : spec.name) + "|" + norm(sizeBucket(r && r.size ? r.size : spec.size)); };
+const histKey = (spec) => { const r = spec.inv ? store.invById.get(spec.inv) : null; return norm(r ? rowParts(r).base : spec.name) + "|" + norm(sizeBucket(r && r.size ? r.size : spec.size)); };
 function printHistory() {
   const h = new Map();
   for (const { printer, batch } of allBatches()) { if (batch.state === B.QUEUED) continue; const per = {};

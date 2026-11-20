@@ -143,8 +143,7 @@ function newPiece(row) {
     const same = (cat.opts.products || []).find((p) => key(p.name) === key(name) || (p.aliases || []).some((a) => key(a) === key(name)));
     if (same) return err(`${same.name} is already in the catalog. Pick it from the list.`);
     const colorLabel = [c1, c2].filter(Boolean).map(colorName).join(" + ");
-    const base = cur && cur.name.trim() ? `${cur.name.trim()} - ${name}` : name;
-    const inventory_name = `${base} (${[size, colorLabel].filter(Boolean).join(", ")})`;
+    const inventory_name = `${name} (${[/^standard$/i.test(size) ? "" : size, colorLabel].filter(Boolean).join(", ")})`.replace(/ \(\)$/, "");
     const btn = g("#npSave"); btn.disabled = true; btn.textContent = "Adding…";
     let r; try { r = await db.addVariant({ product: name, category, size, color_1: c1 ? colorName(c1) : null, color_2: c2 ? colorName(c2) : null, inventory_name, new: ["product", "size"] }); }
     catch (x) { btn.disabled = false; btn.textContent = "Add piece"; return err(db.errText(x)); }

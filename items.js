@@ -2,7 +2,7 @@
 // its sizes (with filament and print time), the colors it is offered in, and every variation (inventory name, size, color, note,
 // remove / bring back, and the order wording learned for it). The database checks and saves it in one go (hq.save_item).
 import * as db from "./supabase.js";
-import { esc, modal, toast, confirmBox, cat, loadCatalog, invalidateCatalog, reloadInventory, SIZES, SIZE_OPTIONS } from "./orders.js";
+import { esc, modal, toast, confirmBox, cat, loadCatalog, invalidateCatalog, reloadInventory, SIZE_OPTIONS } from "./orders.js";
 
 let M = null, card = null, cur = null, orig = "", busy = false, viaList = false, listQ = "", seq = 0, focusVar = null;
 const OPEN = new Set(); // which fold-outs are open, kept across re-draws
@@ -14,7 +14,6 @@ const allColors = () => [...cat.colors.values()].sort((a, b) => a.name.localeCom
 const optLabel = (code) => (cur && cur.id === "enclosure" ? (code === "standard" ? "Latch" : code === "magnetic" ? "Magnetic" : code) : code === "standard" ? "Standard" : code.replace(/-/g, " ").replace(/^./, (c) => c.toUpperCase()));
 const sizeRef = (s) => s.code || "new:" + s.k;
 const sizeOf = (ref) => cur.sizes.find((s) => sizeRef(s) === ref) || null;
-const reEsc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /* ---------- the piece as the editor holds it ---------- */
 function fromServer(r) {
@@ -24,7 +23,7 @@ function fromServer(r) {
     def: { c1: r.default_color_1 || "", c2: r.default_color_2 || "", touched: false },
     sizes: (r.sizes || []).map((s) => ({ k: ++seq, code: s.code, name: s.name, name0: s.name, g: s.filament_g ?? "", min: s.print_minutes ?? "", profile: s.print_profile || "", archived: !!s.archived })),
     colors: { 1: [...((r.colors || {})["1"] || [])], 2: [...((r.colors || {})["2"] || [])] },
-    vars: (r.variants || []).map((v) => ({ id: v.id, notion_id: v.notion_id, sku: v.sku, label: v.label || "", label0: v.label || "", labelTouched: false, note: v.note || "",
+    vars: (r.variants || []).map((v) => ({ id: v.id, notion_id: v.notion_id, sku: v.sku, label: v.label || "", note: v.note || "",
       size: v.size_code, size0: v.size_code, c1: v.color_1 || "", c2: v.color_2 || "", c10: v.color_1 || "", c20: v.color_2 || "", scheme0: v.color_scheme_id, colorName0: v.color_name || "",
       opt: v.option_code || "standard", opt0: v.option_code || "standard", archived: !!v.archived, archived0: !!v.archived, on_hand: v.on_hand, open_lines: v.open_lines || 0, learned: v.learned || [] })),
     forget: [],
@@ -36,44 +35,15 @@ const aliasesOut = () => { const out = [...cur.aliases]; if (cur.keepOld && key(
 const twoColors = () => cur.category === "Floor Insert" || cur.colors[2].length > 0 || !!cur.def.c2 || cur.vars.some((v) => v.c2);
 const colorChanged = (v) => v.c1 !== v.c10 || v.c2 !== v.c20;
 
-/* ---------- inventory names follow a rename or a size/color change (unless the person typed one) ---------- */
-function splitLabel(label, v) { // "Gothic - Web Climb (Small, Black)" -> base + its size/color ending; an ending that isn't size/color words is part of the name
-  const m = String(label).match(/^(.*?)\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)\s*$/); if (!m) return { base: label.trim(), det: "" };
-  const sizeWords = new Set([...SIZES, "One size", ...cur.sizes.map((s) => s.name0 || s.name)].map((x) => x.toLowerCase()));
-  const colorWords = new Set(); for (const c of cat.colors.values()) { colorWords.add(c.name.toLowerCase()); for (const a of c.aliases || []) colorWords.add(String(a).toLowerCase()); }
-  for (const s of cat.schemes.values()) colorWords.add(String(s.name).toLowerCase()); if (v.colorName0) colorWords.add(v.colorName0.toLowerCase());
-  const parts = m[2].split(/,\s*(?![^()]*\))/).map((x) => x.trim()).filter(Boolean);
-  const ok = parts.length > 0 && parts.every((p) => sizeWords.has(p.toLowerCase()) || colorWords.has(p.toLowerCase()) || p.split(/\s*\+\s*/).every((c) => colorWords.has(c.toLowerCase())) || key(p) === v.opt0);
-  return ok ? { base: m[1].trim(), det: ` (${m[2]})` } : { base: label.trim(), det: "" };
-}
-function rebase(base, oldName, newName) { // the piece's part of an inventory name, keeping its "Collection - " start
-  const i = base.toLowerCase().indexOf(oldName.toLowerCase());
-  if (oldName && i >= 0) return base.slice(0, i) + newName + base.slice(i + oldName.length);
-  const m = base.match(/^(.+?)\s+-\s+(.+)$/);
-  if (!m) return newName;
-  const pre = m[1], piece = m[2];
-  if (/^floor( insert)?$/i.test(pre)) return `${pre} - ${newName.replace(/\s+floor(\s+insert)?$/i, "") || newName}`; // "Floor Insert - Checkered" for Checkered Floor
-  const lead = new RegExp("^" + reEsc(pre) + "\\s+", "i");
-  return `${pre} - ${lead.test(oldName) && !lead.test(piece) ? newName.replace(lead, "") || newName : newName}`; // "Cosmic - Space Rock" for Cosmic Space Rock
-}
-function details(v, base) {
+/* ---------- a variation's name: the item's name plus its size, color and option (the database builds it the same way, hq.variant_name) ---------- */
+function vname(v) {
   const s = sizeOf(v.size); const sn = s ? clean(s.name) : "";
   const col = colorChanged(v) ? [v.c1, v.c2].filter((c) => c && c !== "shop-choice").map(colorName).join(" + ") : /^(standard|shop-choice)$/.test(v.scheme0) ? "" : v.colorName0;
-  const opt = v.opt !== "standard" && !new RegExp("\\b" + reEsc(optLabel(v.opt)) + "\\b", "i").test(base) ? optLabel(v.opt) : "";
-  const parts = [sn && !/^standard$/i.test(sn) ? sn : "", col, opt].filter(Boolean);
-  return parts.length ? ` (${parts.join(", ")})` : "";
+  const parts = [sn && !/^standard$/i.test(sn) ? sn : "", col, v.opt !== "standard" ? optLabel(v.opt) : ""].filter(Boolean);
+  return (clean(cur.name) || cur.name0) + (parts.length ? ` (${parts.join(", ")})` : "");
 }
-function relabel() {
-  const nm = nameChanged();
-  for (const v of cur.vars) {
-    if (v.labelTouched || !v.label0) continue;
-    const s = sizeOf(v.size); const idCh = v.size !== v.size0 || colorChanged(v) || v.opt !== v.opt0 || !!(s && s.code && clean(s.name) && clean(s.name) !== s.name0);
-    if (!nm && !idCh) { v.label = v.label0; continue; }
-    const sp = splitLabel(v.label0, v); const base = nm ? rebase(sp.base, cur.name0, clean(cur.name)) : sp.base;
-    v.label = base + (idCh ? details(v, base) : sp.det);
-  }
-}
-function syncLabels() { relabel(); for (const v of cur.vars) { const el = q(`[data-var="${v.id}"] [data-f=label]`); if (el && document.activeElement !== el && el.value !== v.label) el.value = v.label; } }
+function relabel() { for (const v of cur.vars) v.label = vname(v); }
+function syncLabels() { relabel(); for (const v of cur.vars) { const el = q(`[data-var="${v.id}"] [data-f=label]`); if (el && el.textContent !== v.label) el.textContent = v.label; } }
 
 /* ---------- list of every piece ---------- */
 async function showList() {
@@ -124,7 +94,7 @@ function varRow(v, two, opts) {
   const sizes = cur.sizes.filter((s) => !s.archived || sizeRef(s) === v.size);
   const facts = [v.sku, v.on_hand != null ? `${v.on_hand} on shelf` : "", v.open_lines ? `${v.open_lines} on open orders` : ""].filter(Boolean).join(" · ");
   return `<div class="ce-row" data-var="${v.id}">
-    <div class="ce-line"><label class="ce-piece">Name<input data-f="label" value="${esc(v.label)}" autocomplete="off"></label><button type="button" class="ce-x" data-delvar aria-label="Remove variation">×</button></div>
+    <div class="ce-line"><b class="ie-vname" data-f="label">${esc(v.label)}</b><button type="button" class="ce-x" data-delvar aria-label="Remove variation">×</button></div>
     <div class="ce-line">
       <label>Size<select data-f="size">${sizes.map((s) => `<option value="${esc(sizeRef(s))}" ${sizeRef(s) === v.size ? "selected" : ""}>${esc(clean(s.name) || "New size")}</option>`).join("")}</select></label>
       <label>Color${two ? " 1" : ""}<select data-f="c1">${colorOpts(v.c1, "None")}</select></label>
@@ -172,7 +142,7 @@ function payload() {
     tracked: cur.tracked, picks_color: cur.picks_color, addon: cur.addon,
     sizes: cur.sizes.filter((s) => s.code || (!s.archived && clean(s.name))).map((s) => ({ code: s.code, name: clean(s.name), filament_g: num(s.g), print_minutes: num(s.min), print_profile: s.profile.trim(), ...(s.code ? { archived: s.archived } : {}) })),
     colors: { 1: cur.colors[1], 2: cur.colors[2] },
-    variants: cur.vars.map((v) => { const s = sizeOf(v.size); const o = { id: v.id, label: clean(v.label), note: v.note.trim(), size_code: s ? s.code || key(s.name) : v.size0, option_code: v.opt, archived: v.archived };
+    variants: cur.vars.map((v) => { const s = sizeOf(v.size); const o = { id: v.id, note: v.note.trim(), size_code: s ? s.code || key(s.name) : v.size0, option_code: v.opt, archived: v.archived };
       if (colorChanged(v)) { o.color_1 = v.c1; o.color_2 = v.c1 ? v.c2 : ""; } return o; }),
     forget: cur.forget };
   if (cur.def.touched) { p.default_color_1 = cur.def.c1; p.default_color_2 = cur.def.c1 ? cur.def.c2 : ""; }
@@ -185,7 +155,6 @@ function check() { // what the person can fix before the database is asked
     for (const [f, l] of [["g", "Filament"], ["min", "Print time"]]) { const n = num(s[f]); if (n != null && !(n > 0)) return `${clean(s.name) || "Size"}: ${l} must be a number above 0.`; } }
   const names = cur.sizes.filter((s) => !s.archived && clean(s.name)).map((s) => key(s.name)); if (new Set(names).size !== names.length) return "A size is listed twice.";
   for (const v of cur.vars) { if (v.archived) continue;
-    if (v.label0 && !clean(v.label)) return "Every variation needs a name.";
     const s = sizeOf(v.size); if (!s || s.archived || !clean(s.name)) return `${v.label || v.sku}: pick a size.`;
     if (v.c2 && !v.c1) return `${v.label || v.sku}: pick Color 1 first.`; }
   const seen = new Set(); for (const v of cur.vars) { const k = [key((sizeOf(v.size) || {}).name || v.size), v.c1, v.c2, v.opt].join("|"); if (seen.has(k)) return `${v.label || v.sku}: that size and color is here twice.`; seen.add(k); }
@@ -245,7 +214,7 @@ export async function open({ product = null, focus = null } = {}) {
     const f = t.dataset.f; if (!f) return;
     if (t.closest("[data-size]")) { const s = sizeOfEl(t); s[f] = t.value; if (f === "name") { syncLabels(); for (const o of card.querySelectorAll(`[data-f=size] option[value="${CSS.escape(sizeRef(s))}"]`)) o.textContent = clean(s.name) || "New size"; } return; }
     const v = varOf(t); if (!v) return;
-    if (f === "label") { v.label = t.value; v.labelTouched = true; } else if (f === "note") v.note = t.value;
+    if (f === "note") v.note = t.value;
   });
   card.addEventListener("change", (e) => { if (!cur) return; const t = e.target;
     if (t.id === "ieCat") { cur.category = t.value; render(); return; }

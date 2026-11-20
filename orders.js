@@ -108,7 +108,7 @@ export const invRowOf = (l) => (l.notion_inventory_id ? store.invById.get(l.noti
 // the enclosure variant a line is linked to, from its catalog sku: enclosure-small, enclosure-large, enclosure-small-magnetic
 export const encVar = (l) => { const m = String(l.sku || "").match(/^enclosure-(small|large)(?:-(\w+))?$/i); return m ? { size: m[1].toLowerCase(), opt: (m[2] || "").toLowerCase() } : null; };
 
-// Inventory item names: "Gothic - Web Climb (Small, Black)" -> base, size, color
+// An item name with its size/color ending, "Web Climb (Small, Black)" -> base, size, color. Only for text that isn't an inventory row (rows use rowParts).
 export const SIZES = ["Small", "Large", "Mini", "Sling Size", "Standard", "Custom", "Default Size"];
 // `size` is the catalog's size for that item (inventory_rows.size), so a size outside the usual list ("Mini") is still read as a size.
 export function splitName(name, size) {
@@ -119,6 +119,12 @@ export function splitName(name, size) {
   const sizes = parts.filter((p) => known.some((s) => s.toLowerCase() === p.toLowerCase()));
   const colors = parts.filter((p) => !sizes.includes(p));
   return { base: m[1].trim(), size: sizes[0] || "", color: colors.join(" + ") };
+}
+// An inventory row's item, size and color as the catalog has them (inventory_rows hands them over): nothing is read back out of the name.
+export function rowParts(r) {
+  if (!r) return { base: "", size: "", color: "" };
+  if (!r.product) return splitName(r.item, r.size); // a row read before the catalog fields were there
+  return { base: r.product, size: /^standard$/i.test(r.size || "") ? "" : r.size || "", color: [r.color, r.option].filter(Boolean).join(", ") };
 }
 export const sizeLabel = (s) => (!s || /^(standard|default size)$/i.test(s) ? "Small" : s === "Sling Size" ? "Sling" : s);
 // The shop's sizes, in the order every size dropdown lists them. "Sling Size" is the stored name (shown as Sling); a one-size piece is stored as Standard.
@@ -132,10 +138,10 @@ export function sizeOptions(prodSizes, cur, oneSize) {
   return list.map((x) => `<option value="${esc(x)}"${x === cur ? " selected" : ""}>${esc(/^standard$/i.test(x) ? "One size" : sizeLabel(x))}</option>`).join("") + `<option value="__other">Other…</option>`;
 }
 
-// spec from a line: inventory row name when matched, else the line text itself
+// spec from a line: the catalog item when matched, else the line text itself
 export function lineSpec(l) {
   const r = invRowOf(l);
-  if (r) { const sp = splitName(r.item, r.size); return { name: sp.base, size: sp.size, color: sp.color, inv: r.id, custom: /^custom$/i.test(sp.size) }; }
+  if (r) { const sp = rowParts(r); return { name: sp.base, size: sp.size, color: sp.color, inv: r.id, custom: /^custom$/i.test(sp.size) }; }
   const t = cleanText(l.text).replace(/^\d{1,2}\s*[x×]?\s+(?=[a-z])/i, "");
   const parts = /\s[-–]\s/.test(t) ? t.split(/\s[-–]\s/) : t.split(/\s*,\s*/);
   const name = parts.shift().replace(/\(.*?\)/g, "").trim(); const det = parts.join(", ");
@@ -594,8 +600,7 @@ export function pickState(l) {
   // a color this piece isn't listed in yet: the person picking it here is the decision to make it; saving records the color as offered
   const offer = !!(c1 && !(cat.variants.some((x) => x.product_id === p.id && x.color_scheme_id === scheme) || (((p.offered || {})["1"] || []).length + ((p.offered || {})["2"] || []).length > 0 && offered(c1) && (!c2 || offered(c2)))));
   const parts = [size !== "standard" ? sizeName(p, size) : "", scheme !== "standard" ? (cat.schemes.get(scheme) || {}).name || [colorName(c1), colorName(c2)].filter(Boolean).join(" + ") : ""].filter(Boolean);
-  const prefix = (cat.variants.find((x) => x.product_id === p.id && x.name && x.name.includes(" (")) || {}).name; const base = prefix ? prefix.replace(/\s*\((?:[^()]|\([^()]*\))*\)\s*$/, "") : (cat.variants.find((x) => x.product_id === p.id) || {}).name || p.name;
-  return { status: "creatable", name: base + (parts.length ? ` (${parts.join(", ")})` : ""), size, scheme, offer };
+  return { status: "creatable", name: p.name + (parts.length ? ` (${parts.join(", ")})` : ""), size, scheme, offer };
 }
 // the order's words against the pick (mirrors hq.line_check; the server has the last word on save): "Text says Large", "Text says Hot Pink", or ""
 function textCheck(said, l, p) {
