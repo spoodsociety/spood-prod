@@ -1,7 +1,7 @@
 // Print Plan: assign pieces to printers, commit, run batches, finalize. Line states save to order_lines (set_line_state);
 // the queue layout and settings save to app_state key printplan2/main (set_app_state).
 import * as db from "./supabase.js";
-import { $, esc, plural, isoDay, addDays, NO_DATE, store, onChange, load, alloc, owed, free, lineKind, lineSpec, isCustom, shipBy, isExpress, rank, sizeLabel, toast, confirmBox, reloadOrder, reloadInventory, cleanText, setErr, fmtSize, cardHtml, modal, openOrderForm } from "./orders.js";
+import { $, esc, plural, isoDay, addDays, NO_DATE, store, onChange, load, alloc, owed, free, lineKind, lineSpec, isCustom, shipBy, isExpress, rank, sizeLabel, toast, confirmBox, reloadOrder, reloadInventory, cleanText, setErr, fmtSize, cardHtml, modal, openOrderForm, splitName } from "./orders.js";
 
 const KEY = "printplan2/main";
 const PRINTERS = [1, 2, 3, 4, 5, 6];
@@ -21,7 +21,9 @@ const skuKey = (s) => `${norm(s.name)}|${norm(s.size)}|${norm(s.color)}`;
 const specText = (s) => [s.size ? sizeLabel(s.size) : "", s.color].filter(Boolean).join(" · ");
 const sizeBucket = (s) => (/^(small|standard|default size)$/i.test(s || "") || !s ? "Standard" : s);
 function estimateHours(name, size) { const s = (name + " " + (size || "")).toLowerCase(); let h = /floor|insert/.test(s) ? 3 : /climb|wall|tree|mountain/.test(s) ? 2.5 : /window|fireplace|cathedral/.test(s) ? 1.5 : /ledge|bat|rock|cloud|log|mushroom/.test(s) ? 0.75 : 1.25; if (/large/.test(s)) h *= 1.6; if (/sling/.test(s)) h *= 0.5; if (/\d/.test(size || "")) h *= 1.2; return Math.round(h * 4) / 4; }
-const hoursFor = (name, size) => { const v = state.times && state.times[(name + "|" + size).toLowerCase()]; return v > 0 ? Number(v) : estimateHours(name, size); };
+// a piece's print time: the one saved on the item (Inventory → Items, per size), else a rough guess from its name. Guesses show with "~".
+const savedHours = (name, size, inv) => { const r = inv ? store.invById.get(inv) : null; if (r && r.print_minutes > 0) return r.print_minutes / 60; const v = state.times && state.times[(name + "|" + size).toLowerCase()]; return v > 0 ? Number(v) : 0; };
+const hoursFor = (name, size, inv) => savedHours(name, size, inv) || estimateHours(name, size);
 
 /* ---------- catalog: pieces from open orders ---------- */
 let ORDERS = [], ORDER_BY_ID = new Map(), PIECE_BY_ID = new Map(), LINE_BY_UID = new Map(), CATALOG_ITEMS = [], CATALOG_COLORS = [];
@@ -36,8 +38,8 @@ function rebuildCatalog() {
       LINE_BY_UID.set(l.uid, { l, o });
       const sp = lineSpec(l); const qty = Math.max(1, Number(l.qty) || 1); const a = (l.print_state || "") === "" ? alloc.get(l.uid) || 0 : 0;
       const bin = l.packed ? "done" : l.print_state === "printing" || l.print_state === "printed" ? l.print_state : "print";
-      const hours = hoursFor(sp.name, sp.size);
-      for (let n = 0; n < qty; n++) pieces.push({ id: qty > 1 ? l.uid + "#" + n : l.uid, line: l.uid, qty, bin, onShelf: n < a, orderId: o.id, name: sp.name, size: sp.size, color: sp.color, hours, custom: sp.custom || (!sp.inv && isCustom(l.text)), inv: sp.inv, text: cleanText(l.text), note: l.note || "", conflict: l.conflict || "", dims: fmtSize(l) });
+      const hours = hoursFor(sp.name, sp.size, sp.inv); const est = !savedHours(sp.name, sp.size, sp.inv);
+      for (let n = 0; n < qty; n++) pieces.push({ id: qty > 1 ? l.uid + "#" + n : l.uid, line: l.uid, qty, bin, onShelf: n < a, orderId: o.id, name: sp.name, size: sp.size, color: sp.color, hours, est, custom: sp.custom || (!sp.inv && isCustom(l.text)), inv: sp.inv, text: cleanText(l.text), note: l.note || "", conflict: l.conflict || "", dims: fmtSize(l) });
     }
     orders.push({ id: o.id, customer: o.customer, platform: (o.platform || []).join(", "), shipBy: shipBy(o), express: isExpress(o), pieces, o });
   }
@@ -192,6 +194,32 @@ function groupRows(covered) {
   return list;
 }
 
+/* ---------- Auto-plan: queue the open pieces the way they have been run before ----------
+   Every batch that reached a printer says where that item goes and how many fit on a plate. Auto-plan makes one batch per item + size + color
+   (how batches are run by hand), on the least busy of the printers that item usually runs on, soonest ship date first.
+   A piece that has never been printed, a custom size, a shelf piece and a piece already picked by hand are left alone. */
+const histKey = (spec) => { const r = spec.inv ? store.invById.get(spec.inv) : null; return norm(r && r.name ? splitName(r.name, r.size).base : spec.name) + "|" + norm(sizeBucket(r && r.size ? r.size : spec.size)); };
+function printHistory() {
+  const h = new Map();
+  for (const { printer, batch } of allBatches()) { if (batch.state === B.QUEUED) continue; const per = {};
+    for (const it of batch.items) { if (it.outcome?.to === "fail") continue; const k = histKey(it.spec); per[k] = (per[k] || 0) + 1; }
+    for (const [k, n] of Object.entries(per)) { const e = h.get(k) || { by: {}, plate: 0 }; e.by[printer] = (e.by[printer] || 0) + n; e.plate = Math.max(e.plate, n); h.set(k, e); } }
+  return h;
+}
+function autoPlan(covered = coveredPieceIds()) {
+  const hist = printHistory(); const groups = new Map(); const left = []; const ship = (p) => ORDER_BY_ID.get(p.orderId).shipBy;
+  for (const p of shelfPlan(covered).toPrint) { if (!dueOk(p) || ui.picks[p.id]) continue; const k = histKey(p); const h = p.custom ? null : hist.get(k); if (!h) { left.push(p); continue; }
+    const gk = k + "|" + norm(p.color); if (!groups.has(gk)) groups.set(gk, { h, pieces: [] }); groups.get(gk).pieces.push(p); }
+  const list = [...groups.values()].map((g) => { g.pieces.sort((a, b) => ship(a).localeCompare(ship(b))); g.first = ship(g.pieces[0]); return g; }).sort((a, b) => a.first.localeCompare(b.first) || b.pieces.length - a.pieces.length);
+  const load = Object.fromEntries(PRINTERS.map((pr) => [pr, sum(state.lanes[pr].filter((b) => LIVE.has(b.state)), batchHours)]));
+  const batches = [];
+  for (const g of list) { const top = Math.max(...Object.values(g.h.by)); const usual = PRINTERS.filter((pr) => (g.h.by[pr] || 0) * 2 >= top);
+    for (let i = 0; i < g.pieces.length; i += g.h.plate) { const pcs = g.pieces.slice(i, i + g.h.plate);
+      const pr = usual.reduce((best, x) => (load[x] < load[best] || (load[x] === load[best] && g.h.by[x] > g.h.by[best]) ? x : best), usual[0]); load[pr] += sum(pcs, (p) => p.hours);
+      batches.push({ printer: pr, name: [pcs[0].name, specText(pcs[0])].filter(Boolean).join(" · "), ids: pcs.map((p) => p.id) }); } }
+  return { batches, left };
+}
+
 /* ---------- actions (the only code that changes shared state) ---------- */
 const specOf = (x) => ({ name: x.name, size: x.size || "", color: x.color || "", inv: x.inv || null, custom: !!x.custom });
 function queueReprint(it, printer, fromName) { const lane = state.lanes[printer]; if (!lane) return; let batch = lane.find((b) => b.state === B.QUEUED && /^Reprint/.test(b.name)); if (!batch) { batch = { id: nextId("b"), name: "Reprint", state: B.QUEUED, items: [] }; const i = lane.findIndex((b) => b.state === B.QUEUED); if (i < 0) lane.push(batch); else lane.splice(i, 0, batch); } const uid = nextId("r"); batch.items.push({ uid, pieceId: it.pieceId || null, spec: { ...it.spec }, hours: it.hours }); it.outcome = { ...(it.outcome || { to: "fail" }), reprint: { uid, printer } }; }
@@ -210,7 +238,7 @@ const actions = {
   queueFromBin(ids, printer, start, extra, spec) { // pieces of the lines (+ extra copies for stock); starting now gets its own batch, just queuing joins the printer's last queued batch
     const items = ids.map((id) => { const pc = PIECE_BY_ID.get(id); return { uid: id, pieceId: id, spec: specOf(pc), hours: pc.hours }; });
     const inv = spec.inv || store.inv.find((x) => { const sp = lineSpec({ notion_inventory_id: x.id }); return norm(sp.name) === norm(spec.name) && norm(sizeBucket(sp.size)) === norm(sizeBucket(spec.size)) && norm(sp.color) === norm(spec.color); })?.id || null;
-    for (let n = 0; n < extra; n++) items.push({ uid: nextId("s"), pieceId: null, spec: { ...spec, inv }, hours: hoursFor(spec.name, spec.size) });
+    for (let n = 0; n < extra; n++) items.push({ uid: nextId("s"), pieceId: null, spec: { ...spec, inv }, hours: hoursFor(spec.name, spec.size, inv) });
     let batch = start ? null : [...state.lanes[printer]].reverse().find((b) => b.state === B.QUEUED);
     if (batch) batch.items.push(...items); else { batch = { id: nextId("b"), name: "", state: B.QUEUED, items }; batch.name = "Batch " + state.seq; state.lanes[printer].push(batch); }
     if (start) batch.state = B.PRINTING;
@@ -244,18 +272,23 @@ const actions = {
   newStockBatch(printer) { const batch = { id: nextId("b"), name: "", state: B.QUEUED, items: [] }; batch.name = "Stock batch " + state.seq; state.lanes[printer].push(batch); ui.stockFormFor = batch.id; },
   addPiece(id, pieceId) { const at = locate(id); const pc = PIECE_BY_ID.get(pieceId); if (!at || !pc) return; if (coveredPieceIds().has(pieceId)) return "That piece is already queued or printed"; at.batch.items.push({ uid: pieceId, pieceId, spec: specOf(pc), hours: pc.hours }); delete ui.picks[pieceId]; return `Added ${customerOf(pieceId)}’s ${pc.name} to ${at.batch.name}`; },
   dupItem(id, uid) { const at = locate(id); if (!at) return; const i = at.batch.items.findIndex((x) => x.uid === uid); if (i < 0) return; const it = at.batch.items[i]; at.batch.items.splice(i + 1, 0, { uid: nextId("s"), pieceId: null, spec: { ...it.spec }, hours: it.hours }); return `Added another ${it.spec.name}${it.pieceId ? " (extra goes to stock)" : ""}`; },
-  addStock(id, spec, qty) { const at = locate(id); if (!at) return; qty = clamp(Number(qty) || 1, 1, 50); const r = store.inv.find((x) => { const sp = lineSpec({ notion_inventory_id: x.id }); return norm(sp.name) === norm(spec.name) && norm(sizeBucket(sp.size)) === norm(sizeBucket(spec.size)) && norm(sp.color) === norm(spec.color); }); if (r) spec = { ...spec, inv: r.id }; for (let n = 0; n < qty; n++) at.batch.items.push({ uid: nextId("s"), pieceId: null, spec, hours: hoursFor(spec.name, spec.size) }); return `Added ${qty} × ${spec.name}${spec.color ? " (" + spec.color + ")" : ""} for stock`; },
+  addStock(id, spec, qty) { const at = locate(id); if (!at) return; qty = clamp(Number(qty) || 1, 1, 50); const r = store.inv.find((x) => { const sp = lineSpec({ notion_inventory_id: x.id }); return norm(sp.name) === norm(spec.name) && norm(sizeBucket(sp.size)) === norm(sizeBucket(spec.size)) && norm(sp.color) === norm(spec.color); }); if (r) spec = { ...spec, inv: r.id }; for (let n = 0; n < qty; n++) at.batch.items.push({ uid: nextId("s"), pieceId: null, spec, hours: hoursFor(spec.name, spec.size, spec.inv) }); return `Added ${qty} × ${spec.name}${spec.color ? " (" + spec.color + ")" : ""} for stock`; },
   setBatchHours(id, hours) { const at = locate(id); if (!at) return; at.batch.hoursOverride = hours == null ? null : clamp(Math.round(Number(hours) * 4) / 4, 0.25, 200); ui.editTimeFor = null; return hours == null ? `${at.batch.name} back to the estimate` : `${at.batch.name} set to ${fmtHours(batchHours(at.batch))}`; },
   setBatchMin(n) { state.batchMin = clamp(Math.round(Number(n) || 3), 2, 20); },
+  autoPlan(batches, nLeft) { let made = 0, n = 0; const covered = coveredPieceIds();
+    for (const b of batches) { const pcs = b.ids.map((id) => PIECE_BY_ID.get(id)).filter((p) => p && !covered.has(p.id)); if (!pcs.length || !state.lanes[b.printer]) continue;
+      state.lanes[b.printer].push({ id: nextId("b"), name: `${b.name} ×${pcs.length}`, state: B.QUEUED, items: pcs.map((p) => ({ uid: p.id, pieceId: p.id, spec: specOf(p), hours: p.hours })) });
+      pcs.forEach((p) => { covered.add(p.id); delete ui.picks[p.id]; }); made++; n += pcs.length; }
+    return (made ? `Queued ${plural(made, "batch", "batches")} · ${plural(n, "piece")}` : "Nothing new to queue") + (nLeft ? ` · ${nLeft} left for you` : ""); },
   queueSuggestion(key, printer, pieceIds) { printer = Number(printer); if (!printer) return; const pcs = pieceIds.map((id) => PIECE_BY_ID.get(id)).filter(Boolean); if (!pcs.length) return; const g = pcs[0]; const batch = { id: nextId("b"), name: `${g.name}${sizeBucket(g.size) ? " · " + sizeBucket(g.size) : ""} ×${pcs.length}`, state: B.QUEUED, items: pcs.map((p) => ({ uid: p.id, pieceId: p.id, spec: specOf(p), hours: p.hours })) }; state.lanes[printer].push(batch); pcs.forEach((p) => delete ui.picks[p.id]); return `Queued ${batch.name} on Printer ${printer}`; },
   setHpd(h) { state.hoursPerDay = clamp(Math.round(Number(h) || 12), 1, 24); },
   setWeeks(w) { state.restockWeeks = clamp(Number(w) || 0, 0, 8); },
   setKeep(rowId, n) { const v = clamp(Math.round(Number(n) || 0), 0, 99); if (v) state.keep[rowId] = v; else delete state.keep[rowId]; },
-  restockAdd(rowId, qty, printer) { printer = Number(printer); qty = clamp(Math.round(Number(qty) || 0), 1, 50); if (!printer) return "Pick a printer first"; const r = store.invById.get(rowId); if (!r) return; const spec = lineSpec({ notion_inventory_id: r.id }); let batch = [...state.lanes[printer]].reverse().find((b) => b.state === B.QUEUED && b.items.every((i) => !i.pieceId) && /^Stock batch/.test(b.name)); if (!batch) { batch = { id: nextId("b"), name: "", state: B.QUEUED, items: [] }; batch.name = "Stock batch " + state.seq; state.lanes[printer].push(batch); } for (let n = 0; n < qty; n++) batch.items.push({ uid: nextId("s"), pieceId: null, spec, hours: hoursFor(spec.name, spec.size) }); return `Added ${qty} × ${spec.name}${spec.color ? " (" + spec.color + ")" : ""} to ${batch.name} on Printer ${printer}`; },
+  restockAdd(rowId, qty, printer) { printer = Number(printer); qty = clamp(Math.round(Number(qty) || 0), 1, 50); if (!printer) return "Pick a printer first"; const r = store.invById.get(rowId); if (!r) return; const spec = lineSpec({ notion_inventory_id: r.id }); let batch = [...state.lanes[printer]].reverse().find((b) => b.state === B.QUEUED && b.items.every((i) => !i.pieceId) && /^Stock batch/.test(b.name)); if (!batch) { batch = { id: nextId("b"), name: "", state: B.QUEUED, items: [] }; batch.name = "Stock batch " + state.seq; state.lanes[printer].push(batch); } for (let n = 0; n < qty; n++) batch.items.push({ uid: nextId("s"), pieceId: null, spec, hours: hoursFor(spec.name, spec.size, spec.inv) }); return `Added ${qty} × ${spec.name}${spec.color ? " (" + spec.color + ")" : ""} to ${batch.name} on Printer ${printer}`; },
   dismissPending(key) { delete state.pendingStock[key]; },
   clearPending(key) { delete state.pendingStock[key]; },
 };
-const UNDOABLE = new Set(["commitPicks", "queueFromBin", "moveBatch", "stackBatch", "sendBatch", "startBatch", "finishPrinting", "backToPrinting", "setDest", "addPiece", "dupItem", "setReprint", "reprintItem", "finalize", "reopen", "removeItem", "queueSuggestion", "newStockBatch", "addStock", "setBatchHours", "restockAdd", "dismissPending", "renameBatch"]);
+const UNDOABLE = new Set(["autoPlan", "commitPicks", "queueFromBin", "moveBatch", "stackBatch", "sendBatch", "startBatch", "finishPrinting", "backToPrinting", "setDest", "addPiece", "dupItem", "setReprint", "reprintItem", "finalize", "reopen", "removeItem", "queueSuggestion", "newStockBatch", "addStock", "setBatchHours", "restockAdd", "dismissPending", "renameBatch"]);
 let history = [];
 function dispatch(name, ...args) {
   if (UNDOABLE.has(name)) { history.push({ label: name, snap: JSON.stringify(state) }); if (history.length > 30) history.shift(); }
@@ -332,7 +365,7 @@ function viewNeeds(covered) {
       <div class="items">${o.open.map((p) => { const st = stockFor(p); const up = upcoming[groupKey(p)]; const sold = sold7For(p); const picked = ui.picks[p.id]; const gap = gaps.get(groupKey(p));
         const notes = [gap?.short ? `<span class="gapnote" title="${esc(gapTitle(gap))}">Short ${gap.short} for the next ${plural(ui.ahead, "day")}</span>` : "", p.conflict ? `<span class="dup miss">${esc(p.conflict)}</span>` : "", st == null ? (p.custom ? `<span class="dup${p.dims ? "" : " miss"}">${esc(p.dims ? "Custom · " + p.dims : "Custom size missing")}</span>` : `<span class="dup">Not in Inventory</span>`) : `<span class="dup${st.qty > 0 ? " instock" : ""}">In stock: ${esc(stockText(st))}</span>`, sold ? `<span class="dup">Ordered in the last 7 days: ${sold}</span>` : "", up?.n > 1 ? `<span class="dup">${up.n} needed in the next ${plural(ui.ahead, "day")}${sizeBreakdown(up.sizes)}</span>` : ""].filter(Boolean).join("");
         if (shelf.has(p.id)) return `<div class="item onshelf"><span class="nm">${esc(p.name)}</span><span class="meta"><span>${esc(specText(p))}</span><span class="shelfnote">On the shelf · no print needed</span><span class="dup">In stock: ${esc(stockText(st))}</span></span><select data-act="pick" data-piece="${p.id}" ${pickAttrs(picked)} aria-label="Print ${esc(p.name)} anyway">${printerOptions(picked, { blank: "Pull from shelf" })}</select></div>`;
-        return `<div class="item"><span class="nm">${esc(p.name)}</span><span class="meta"><span>${[specText(p) ? esc(specText(p)) : "", `<span class="mono">${fmtHours(p.hours)}</span>`].filter(Boolean).join(" · ")}</span>${notes}</span><select data-act="pick" data-piece="${p.id}" ${pickAttrs(picked)} aria-label="Printer for ${esc(p.name)}">${printerOptions(picked)}</select></div>`; }).join("")}
+        return `<div class="item"><span class="nm">${esc(p.name)}</span><span class="meta"><span>${[specText(p) ? esc(specText(p)) : "", `<span class="mono">${p.est ? "~" : ""}${fmtHours(p.hours)}</span>`].filter(Boolean).join(" · ")}</span>${notes}</span><select data-act="pick" data-piece="${p.id}" ${pickAttrs(picked)} aria-label="Printer for ${esc(p.name)}">${printerOptions(picked)}</select></div>`; }).join("")}
       ${o.prn.map((p) => { const r = pieceRun(p); return `<div class="item printing"><span class="nm">${esc(p.name)}</span><span class="meta"><span>${esc(specText(p))}</span></span>${r.printer ? `<span class="runtag">🖨 Printing on Printer ${r.printer}</span>` : `<span class="runtag">🖨 Printing · not on a printer <button type="button" class="pq-btn mini ghost" data-act="unprint" data-line="${esc(p.line)}">Not printing</button></span>`}</div>`; }).join("")}</div></article>`;
   }).join("");
 }
@@ -434,7 +467,7 @@ function viewCommitBar(covered) { const picks = livePicks(covered); const by = {
 /* ---------- render ---------- */
 let host = null, pointerHeld = false, lastTouch = 0, bgTimer = null;
 function shell() {
-  return `<div class="top"><div><span class="tag">Live · Supabase</span><div class="sub">Assign each piece to a printer, commit, then stack and order the batches on each printer.</div></div>
+  return `<div class="top"><div><button type="button" class="pq-btn accent" data-act="autoPlan">Auto-plan</button></div>
     <nav class="views" aria-label="View">${[["needs", "Needs printing", "cNeeds"], ["byitem", "By item & color", "cGroups"], ["bycolor", "By color", "cColors"], ["queues", "Printer queues", "cQueued"], ["restock", "Restock", "cRestock"]].map(([v, l, c]) => `<button type="button" data-act="setView" data-view="${v}" aria-pressed="false">${l} <b id="${c}">0</b></button>`).join("")}<button type="button" class="pq-btn ghost mini" data-act="undo" id="undoBtn" disabled>↶ Undo</button></nav></div>
     <div id="pqErr" class="err"></div><div class="kpis" id="pqKpis"></div>
     <section id="vNeeds" hidden><div class="pqsearch"><label>Ships by <select data-act="due"><option value="all">Any time</option><option value="0">Today (and late)</option><option value="1">Tomorrow</option><option value="3">Next 3 days</option><option value="7">Next 7 days</option></select></label><label>Look ahead <input id="ahead" data-act="setAhead" type="number" min="1" max="60" style="width:4.5em;padding:4px"> days</label><label><input type="checkbox" data-act="hideShelf"> Hide shelf pieces</label><input type="search" data-act="search" placeholder="Search item, color, size, customer…" aria-label="Search pieces" autocomplete="off"></div><div id="gapNeeds"></div><div id="orders" class="orders"></div></section>
@@ -467,7 +500,7 @@ function render() {
   setHTML(q("#pqKpis"), viewKpis(covered));
   const sugg = view === "byitem" || view === "queues" ? viewBatchSuggestions(covered) : ""; setHTML(q("#batchByItem"), view === "byitem" ? sugg : ""); setHTML(q("#batchQueues"), view === "queues" ? sugg : "");
   const ub = q("#undoBtn"); const last = history[history.length - 1]; ub.disabled = !last; ub.title = last ? "Undo " + last.label : "Nothing to undo";
-  const bar = viewCommitBar(covered); q("#commitBar").hidden = !(view === "needs" || view === "byitem" || view === "bycolor"); setHTML(q("#pcounts"), bar.counts); q("#commitBtn").classList.toggle("dim", !bar.n); q("#commitBtn").textContent = bar.n ? `Commit ${plural(bar.n, "piece")} to queues` : "Commit to queues";
+  const bar = viewCommitBar(covered); q("#commitBar").hidden = !bar.n || !(view === "needs" || view === "byitem" || view === "bycolor"); setHTML(q("#pcounts"), bar.counts); q("#commitBtn").classList.toggle("dim", !bar.n); q("#commitBtn").textContent = bar.n ? `Commit ${plural(bar.n, "piece")} to queues` : "Commit to queues";
   q("#dlItems").innerHTML = CATALOG_ITEMS.map((n) => `<option value="${esc(n)}">`).join(""); q("#dlColors").innerHTML = CATALOG_COLORS.map((n) => `<option value="${esc(n)}">`).join("");
 }
 function refresh() { if (!host) return; rebuildCatalog(); SALES = sold7(); if (loaded) binCleanup(); bgRender(); }
@@ -482,6 +515,9 @@ const CLICK = { showOrder: (d) => showOrder(d.piece),
   commitPicks: () => { const picks = livePicks(); if (!picks.length) { toast("Pick a printer for at least one piece first"); return; } dispatch("commitPicks", picks); ui.picks = {}; persistUi(); render(); },
   commitGo: () => { const picks = livePicks(); if (!picks.length) { toast("Pick a printer for at least one piece first"); return; } dispatch("commitPicks", picks); ui.picks = {}; ui.view = "queues"; persistUi(); render(); },
   clearPicks: () => uiSet(() => { ui.picks = {}; }),
+  autoPlan: () => { if (!loaded || loadErr) { toast("⚠ The print plan hasn't loaded yet", true); return; } const { batches, left } = autoPlan();
+    if (!batches.length) { toast(left.length ? `Nothing to queue: ${plural(left.length, "piece")} left for you` : "Nothing to queue"); return; }
+    ui.view = "queues"; dispatch("autoPlan", batches, left.length); },
   undo: () => undo(),
   unprint: async (d, el) => { el.disabled = true; const L = LINE_BY_UID.get(d.line); try { await db.setLineState([{ uid: d.line, print_state: "print", print_src: "bin" }]); } catch (e) { toast("⚠ " + db.errText(e), true); } if (L) { await reloadOrder(L.o.id); load(); } },
   addPiece: (d, el) => { const s = el.closest(".sform")?.querySelector("[data-act=addPieceSel]"); if (!s || !s.value) { toast("Choose a piece first"); return; } dispatch("addPiece", d.batch, s.value); },
