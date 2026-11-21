@@ -596,6 +596,19 @@ label.allto{display:flex;flex-direction:row;gap:6px;align-items:center;font-size
 .namebox .hint{margin:0;font-size:.9rem;color:var(--muted);min-height:1.2em}
 .namebox .row{flex-wrap:wrap}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+/* New look (Nov 21, 2026): white tabs, checker only behind the title, softer cards and tiles.
+   Looks only. Remove this block to go back to the look before it. */
+body{background-image:none}
+nav.tabs{background:var(--surface);color:var(--fg);box-shadow:var(--bub-sm)}
+nav.tabs button:hover,nav.tabs a:hover{background:var(--field)}
+nav.tabs a{box-shadow:inset -1px 0 0 var(--line)}
+nav.tabs a:focus-visible{outline-color:var(--eye)}
+nav.tabs button[aria-selected="true"]{background:var(--field-line);color:var(--fg);box-shadow:none}
+header.top{background-color:var(--bg);background-image:conic-gradient(var(--check) 25%,transparent 0 50%,var(--check) 0 75%,transparent 0);background-size:96px 96px;box-shadow:none;padding:22px 24px}
+.card{box-shadow:var(--bub-sm)}
+@media (min-width:621px){.card{border-radius:24px}}
+.kpi,.kpi:nth-child(4n+2),.kpi:nth-child(4n+3),.kpi:nth-child(4n+4){background:var(--surface);color:var(--fg);box-shadow:var(--bub-sm)}
+.kpi span,.kpi small{color:var(--muted)}
 </style>
 </head>
 <body>
@@ -652,7 +665,7 @@ label.allto{display:flex;flex-direction:row;gap:6px;align-items:center;font-size
 <div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
 <div id="modalHost"></div>
 
-<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611192137","./orders.js":"./orders.js?v=2611192137","./printplan.js":"./printplan.js?v=2611192137","./inventory.js":"./inventory.js?v=2611192137","./collections.js":"./collections.js?v=2611192137","./items.js":"./items.js?v=2611192137"}}</script>
+<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611211239","./orders.js":"./orders.js?v=2611211239","./printplan.js":"./printplan.js?v=2611211239","./inventory.js":"./inventory.js?v=2611211239","./collections.js":"./collections.js?v=2611211239","./items.js":"./items.js?v=2611211239"}}</script>
 <script type="module">
 import * as db from "./supabase.js";
 import * as orders from "./orders.js";
