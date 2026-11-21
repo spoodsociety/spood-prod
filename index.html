@@ -652,7 +652,7 @@ label.allto{display:flex;flex-direction:row;gap:6px;align-items:center;font-size
 <div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
 <div id="modalHost"></div>
 
-<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611192137","./orders.js":"./orders.js?v=2611192137","./printplan.js":"./printplan.js?v=2611192137","./inventory.js":"./inventory.js?v=2611192137","./collections.js":"./collections.js?v=2611192137","./items.js":"./items.js?v=2611192137"}}</script>
+<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611202006","./orders.js":"./orders.js?v=2611202006","./printplan.js":"./printplan.js?v=2611202006","./inventory.js":"./inventory.js?v=2611202006","./collections.js":"./collections.js?v=2611202006","./items.js":"./items.js?v=2611202006"}}</script>
 <script type="module">
 import * as db from "./supabase.js";
 import * as orders from "./orders.js";
@@ -718,6 +718,18 @@ const upd = document.getElementById("updated");
 orders.onChange(() => { upd.textContent = orders.store.err ? "⚠ " + orders.store.err : orders.store.loadedAt ? `${orders.plural(orders.store.open.length, "open order")} · ${orders.plural(orders.store.inv.length, "inventory item")} · synced ${orders.store.loadedAt.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", second: "2-digit" })}` : "Connecting to Supabase…"; });
 await orders.load();
 orders.load({ done: true }); // Done orders (the bulk, rarely changing) arrive in the background; the open board is already up
+
+// the nightly backup says nothing when it worked; it says so here when it failed, never ran or is more than 36 hours old
+async function checkBackup() {
+  try {
+    const s = await db.backupStatus();
+    const day = (t) => new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    const msg = s && s.failed ? "Nightly backup failed" + (s.failed.error ? ": " + s.failed.error : "") : !s || !s.last_at ? "No nightly backup yet" : Number(s.age_hours) > 36 ? "No nightly backup since " + day(s.last_at) : "";
+    document.getElementById("banner").innerHTML = msg ? `<div class="err">⚠ ${orders.esc(msg)}</div>` : "";
+  } catch (e) { console.error(e); }
+}
+checkBackup();
+setInterval(() => { if (document.visibilityState === "visible") checkBackup(); }, 3600000);
 
 // refresh: on demand, when the tab comes back, and every 20 s while visible — open orders, then the plan (no local copies of server data are kept between loads).
 // Done orders are re-read only by the Refresh button and the Done list; marking Done / Undo updates that one order.

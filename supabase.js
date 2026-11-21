@@ -39,7 +39,7 @@ export class RpcError extends Error {
 export const errText = (e) => (e instanceof RpcError ? e.message : String((e && e.message) || e || "Something went wrong"));
 
 /* when this tab last wrote: a read that started before a write and finished after it is older than what the screen shows, and is thrown away */
-const READS = new Set(["read_orders", "inventory_rows", "catalog_options", "resolve_lines", "read_app_state", "pick_collection", "read_collections", "read_item", "backup_data"]);
+const READS = new Set(["read_orders", "inventory_rows", "catalog_options", "resolve_lines", "read_app_state", "pick_collection", "read_collections", "read_item", "backup_data", "backup_status"]);
 let writeAt = 0;
 export const lastWriteAt = () => writeAt;
 export async function rpc(fn, args = {}) {
@@ -88,6 +88,8 @@ export async function addVariant(p) { const r = await rpc("add_variant", { p });
 export const applyMoves = (moves) => rpc("apply_moves", { p_moves: moves.map((m) => ({ op_id: opId("mv"), ...m })), p_by: by(), p_source: "hq" });
 // backup_data: every hq table as one JSON document (logged as backup_downloaded); the Inventory Backup button saves it as a file
 export const backupData = () => rpc("backup_data", { p_by: by() });
+// backup_status: the newest verified nightly copy ({last_at, age_hours, kept, bytes, failed}); read-only
+export const backupStatus = () => rpc("backup_status");
 export const setAppState = (key, value, version) => rpc("set_app_state", { p: { op_id: opId("state"), key, value, version }, p_by: by() });
 
 /* ---------- order payload: the jsonb shape save_order expects, built from a read_orders row ---------- */
