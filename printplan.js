@@ -1,7 +1,7 @@
 // Print Plan: assign pieces to printers, commit, run batches, finalize. Line states save to order_lines (set_line_state);
 // the queue layout and settings save to app_state key printplan2/main (set_app_state).
 import * as db from "./supabase.js";
-import { $, esc, plural, isoDay, addDays, NO_DATE, store, onChange, load, alloc, owed, free, lineKind, lineSpec, isCustom, shipBy, isExpress, rank, sizeLabel, toast, confirmBox, reloadOrder, reloadInventory, cleanText, setErr, fmtSize, cardHtml, modal, openOrderForm, rowParts } from "./orders.js";
+import { $, esc, plural, isoDay, addDays, NO_DATE, store, onChange, load, alloc, owed, free, lineKind, lineSpec, isCustom, shipBy, isExpress, rank, sizeLabel, toast, confirmBox, reloadOrder, reloadInventory, cleanText, setErr, fmtSize, cardHtml, modal, openOrderForm, rowParts, pressing, afterPress } from "./orders.js";
 
 const KEY = "printplan2/main";
 const PRINTERS = [1, 2, 3, 4, 5, 6];
@@ -472,7 +472,7 @@ function viewRestock(covered) {
 function viewCommitBar(covered) { const picks = livePicks(covered); const by = {}; for (const [id, p] of picks) { (by[p] ||= { n: 0, h: 0 }); by[p].n++; by[p].h += PIECE_BY_ID.get(id).hours; } return { counts: picks.length ? PRINTERS.filter((p) => by[p]).map((p) => `<span class="pc" style="--pc:${printerColor(p)}">Printer ${p}: ${by[p].n} · ${fmtHours(by[p].h)}</span>`).join("") : '<span class="sub">No pieces assigned yet.</span>', n: picks.length }; }
 
 /* ---------- render ---------- */
-let host = null, pointerHeld = false, lastTouch = 0, bgTimer = null;
+let host = null, pointerHeld = false, lastTouch = 0, bgTimer = null, holdRender = false, renderDue = false;
 function shell() {
   return `<div class="top"><div><button type="button" class="pq-btn accent" data-act="autoPlan">Auto-plan</button></div>
     <nav class="views" aria-label="View">${[["needs", "Needs printing", "cNeeds"], ["byitem", "By item & color", "cGroups"], ["bycolor", "By color", "cColors"], ["queues", "Printer queues", "cQueued"], ["restock", "Restock", "cRestock"]].map(([v, l, c]) => `<button type="button" data-act="setView" data-view="${v}" aria-pressed="false">${l} <b id="${c}">0</b></button>`).join("")}<button type="button" class="pq-btn ghost mini" data-act="undo" id="undoBtn" disabled>↶ Undo</button></nav></div>
@@ -489,6 +489,7 @@ const setHTML = (el, html) => { if (!el || el.__html === html) return false; el.
 function bgRender() { clearTimeout(bgTimer); const a = document.activeElement; const choosing = a && host && host.contains(a) && (a.tagName === "SELECT" || a.tagName === "INPUT"); if (pointerHeld && Date.now() - lastTouch > 4000) pointerHeld = false; if (pointerHeld || Date.now() - lastTouch < (choosing ? 2500 : 900)) { bgTimer = setTimeout(bgRender, 500); return; } render(); }
 function render() {
   if (!host) return;
+  if (holdRender) { renderDue = true; return; } // a typed box was committed by the press of a button: redraw once that click has landed
   const q = (s) => host.querySelector(s);
   q("#pqErr").textContent = loadErr ? "⚠ Print plan didn't load: " + loadErr : saveErr ? "⚠ Print plan not saved: " + saveErr : store.errs.plan || "";
   const covered = coveredPieceIds(); const view = ui.view;
@@ -576,7 +577,9 @@ export function init() {
   host.addEventListener("focusin", () => { lastTouch = Date.now(); }, true); host.addEventListener("keydown", () => { lastTouch = Date.now(); }, true);
   host.addEventListener("click", (e) => { const el = e.target.closest("[data-act]"); if (!el || ["SELECT", "INPUT", "FORM"].includes(el.tagName)) { if (e.target.closest("summary select")) e.preventDefault(); return; } const fn = CLICK[el.dataset.act]; if (!fn) return; try { const r = fn(el.dataset, el); if (r && r.catch) r.catch((err) => toast("Something went wrong: " + db.errText(err), true)); } catch (err) { console.error(err); toast("Something went wrong: " + (err.message || err), true); } });
   host.addEventListener("click", (e) => { if (e.target.closest("summary select")) e.preventDefault(); }, true);
-  host.addEventListener("change", (e) => { pointerHeld = false; const el = e.target.closest("[data-act]"); if (el && CHANGE[el.dataset.act]) { try { CHANGE[el.dataset.act](el.dataset, el); } catch (err) { console.error(err); toast("Something went wrong: " + (err.message || err), true); } } });
+  host.addEventListener("change", (e) => { const typed = pressing() && e.target.tagName === "INPUT" && !/^(checkbox|radio)$/.test(e.target.type); pointerHeld = false; const el = e.target.closest("[data-act]");
+    if (typed && el && CHANGE[el.dataset.act]) { holdRender = true; afterPress(() => { holdRender = false; if (renderDue) { renderDue = false; render(); } }); }
+    if (el && CHANGE[el.dataset.act]) { try { CHANGE[el.dataset.act](el.dataset, el); } catch (err) { console.error(err); toast("Something went wrong: " + (err.message || err), true); } } });
   host.addEventListener("input", (e) => { const el = e.target.closest("[data-act=search]"); if (!el) return; ui.q = el.value; persistUi(); render(); });
   host.addEventListener("submit", (e) => { const tf = e.target.closest("form[data-act=setBatchHours]"); if (tf) { e.preventDefault(); dispatch("setBatchHours", tf.dataset.batch, new FormData(tf).get("hours")); return; } const form = e.target.closest("form[data-act=addStock]"); if (!form) return; e.preventDefault(); const fd = new FormData(form); const name = String(fd.get("item") || "").trim(); if (!name) return; dispatch("addStock", form.dataset.batch, { name, size: String(fd.get("size") || ""), color: String(fd.get("color") || "").trim(), inv: null, custom: false }, fd.get("qty")); });
   host.addEventListener("toggle", (e) => { const d = e.target; if (d.matches?.("details[data-batchbox]")) { ui.batchOpen = d.open; persistUi(); } if (d.matches?.("details[data-group]")) { ui.openGroups = ui.openGroups.filter((k) => k !== d.dataset.group); if (d.open) ui.openGroups.push(d.dataset.group); persistUi(); } if (d.matches?.("details[data-cgroup]")) { ui.openColors = ui.openColors.filter((k) => k !== d.dataset.cgroup); if (d.open) ui.openColors.push(d.dataset.cgroup); persistUi(); } }, true);

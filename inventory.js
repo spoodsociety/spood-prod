@@ -1,6 +1,6 @@
 // Inventory: shelf view (tiles per variation), list view (end-of-day count), counts and adjustments through apply_moves.
 import * as db from "./supabase.js";
-import { $, esc, plural, store, onChange, owed, rowParts, sizeLabel, sizeOptions, toast, modal, reloadInventory, setErr, shipBy, fmtDay, cleanText, invRowOf, eff, lineKind, loadCatalog, invalidateCatalog, cat } from "./orders.js";
+import { $, esc, plural, store, onChange, owed, rowParts, sizeLabel, sizeOptions, toast, modal, reloadInventory, setErr, afterPress, shipBy, fmtDay, cleanText, invRowOf, eff, lineKind, loadCatalog, invalidateCatalog, cat } from "./orders.js";
 
 const PRODUCT_ORDER = ["Cosmic", "Galaxy", "Gothic", "Haunted", "Neon Halloween", "Woodland", "Yeti", "Ocean", "Christmas", "Celestial Bat"];
 const TAIL = ["Floor Inserts", "No collection", "Supplies"];
@@ -293,9 +293,11 @@ export function init() {
     if (t.closest("#cundo")) { for (const id of edits.keys()) setErr("inv:" + id, ""); edits.clear(); bases.clear(); touched.clear(); render(); return; }
   });
   host.addEventListener("submit", (e) => { const f = e.target.closest("#adjForm"); if (!f) return; e.preventDefault(); const v = D.V.find((x) => x.id === openV); if (!v) return; saveAdjust(v, f.querySelector("#adjKind").value, f.querySelector("#adjQty").value, f.querySelector("#adjReason").value.trim()); });
-  host.addEventListener("change", (e) => { if (e.target.id === "pcount") { const v = D.V.find((x) => x.id === openV); if (v) { setCount(v, e.target.value); render(); } } });
+  // the count is taken as it is typed, so Save is live before the box loses focus; the redraw waits for a press in progress (see afterPress)
+  host.addEventListener("input", (e) => { if (e.target.id !== "pcount" || saving) return; const v = D.V.find((x) => x.id === openV); if (!v) return; if (e.target.value === "") { edits.delete(v.id); bases.delete(v.id); } else setCount(v, e.target.value); const b = host.querySelector("#psave"); if (b) { b.disabled = !edits.has(v.id); b.textContent = edits.has(v.id) ? "Save count" : "No change"; } });
+  host.addEventListener("change", (e) => { if (e.target.id === "pcount") { const v = D.V.find((x) => x.id === openV); if (v) { setCount(v, e.target.value); afterPress(render); } } });
   host.addEventListener("keydown", (e) => { const inp = e.target.closest && e.target.closest("[data-count]"); if (inp && e.key === "Enter") { e.preventDefault(); const v = D.V.find((x) => x.id === inp.dataset.count); setCount(v, inp.value); const all = [...host.querySelectorAll("[data-count]")]; const nx = all[all.indexOf(inp) + 1]; if (nx) { const sec = nx.closest("[data-csec]"); if (sec) OPENC.add(sec.dataset.csec); const it = nx.closest("[data-citem]"); if (it) OPENI.add(it.dataset.citem); } render(); if (nx) { const el = host.querySelector("#" + CSS.escape(nx.id)); if (el) { el.focus(); el.select(); el.scrollIntoView({ block: "center" }); } } } if (e.key === "Enter" && e.target.id === "pcount") { e.preventDefault(); const v = D.V.find((x) => x.id === openV); if (v) { setCount(v, e.target.value); render(); } } });
-  host.addEventListener("focusout", (e) => { const inp = e.target.closest && e.target.closest("[data-count]"); if (inp && inp.value !== "") { const v = D.V.find((x) => x.id === inp.dataset.count); if (v && String(v.val) !== inp.value) { setCount(v, inp.value); setTimeout(softRender, 0); } } });
+  host.addEventListener("focusout", (e) => { const inp = e.target.closest && e.target.closest("[data-count]"); if (inp && inp.value !== "") { const v = D.V.find((x) => x.id === inp.dataset.count); if (v && String(v.val) !== inp.value) { setCount(v, inp.value); afterPress(() => setTimeout(softRender, 0)); } } });
   host.addEventListener("toggle", (e) => { const d = e.target; if (!d.dataset) return; if (d.dataset.csec) d.open ? OPENC.add(d.dataset.csec) : OPENC.delete(d.dataset.csec); if (d.dataset.citem) d.open ? OPENI.add(d.dataset.citem) : OPENI.delete(d.dataset.citem); }, true);
   host.querySelector("#q").addEventListener("input", render);
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && openV) { openV = null; render(); } });

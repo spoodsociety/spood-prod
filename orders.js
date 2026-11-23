@@ -15,6 +15,18 @@ export const cleanText = (t) => String(t || "").replace(/^[\s•·\-–—*]+/, 
 export const normName = (s) => String(s || "").toLowerCase().replace(/\s*\*+\s*$/, "").replace(/\s+/g, " ").trim();
 export const toks = (s) => String(s || "").toLowerCase().replace(/&/g, " and ").replace(/[^a-z0-9+]+/g, " ").trim().split(" ").filter(Boolean);
 
+/* A text or number box commits its edit when it loses focus, and that is also the moment a button is being pressed. Redrawing the screen right then
+   swaps the button out from under the pointer and the click never arrives (the first tap on Save does nothing). afterPress runs fn now when nothing is
+   being pressed, otherwise just after the press ends, once the click has been delivered. */
+const PRESS = { down: false };
+if (typeof document !== "undefined") { document.addEventListener("pointerdown", () => { PRESS.down = true; }, true); for (const ev of ["pointerup", "pointercancel"]) document.addEventListener(ev, () => { PRESS.down = false; }, true); }
+export const pressing = () => PRESS.down;
+export function afterPress(fn) {
+  if (!PRESS.down) return fn();
+  let done = false; const go = () => { if (done) return; done = true; clearTimeout(t); document.removeEventListener("pointerup", go, true); document.removeEventListener("pointercancel", go, true); setTimeout(fn, 0); };
+  const t = setTimeout(go, 1500); document.addEventListener("pointerup", go, true); document.addEventListener("pointercancel", go, true);
+}
+
 let toastT = 0;
 export function toast(msg, bad = false) { const t = $("#toast"); if (!t) return; t.textContent = msg; t.className = "toast" + (bad ? " bad" : ""); t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, Math.min(10000, Math.max(bad ? 6000 : 2400, String(msg).length * 60))); }
 
@@ -626,7 +638,7 @@ function lineFromSaved(l) {
   const v = (l.notion_inventory_id && cat.varByNotion.get(l.notion_inventory_id)) || (l.variant_id != null && cat.varById.get(String(l.variant_id))) || null;
   const base = { uid: l.uid, qty: Number(l.qty) || 1, note: l.note || "", tag: l.tag || "", group_uid: l.group_uid || null, print_state: l.print_state, packed: l.packed, size_1: l.size_1 ?? "", size_2: l.size_2 ?? "", size_3: l.size_3 ?? "", size_unit: l.size_unit || "in", size_basis: l.size_basis || "piece" };
   if (v) { const c = schemeColors(v.color_scheme_id); return { ...base, kind: "pick", product_id: v.product_id, size_code: v.size_code, c1: c.c1, c2: c.c2, option_code: v.option_code || "standard", untracked: false, said: normName(cleanText(l.text)) === normName(v.name) ? "" : cleanText(l.text) }; }
-  return { ...base, kind: "text", text: cleanText(l.text), inv: l.notion_inventory_id || "", untracked: l.match === "untracked" };
+  return { ...base, kind: "text", text: cleanText(l.text), was: cleanText(l.text), inv: l.notion_inventory_id || "", untracked: l.match === "untracked" };
 }
 const pickLine = (product_id, extra = {}) => { const p = cat.byProduct.get(product_id); const d = p && p.default_scheme ? schemeColors(p.default_scheme) : { c1: "", c2: "" }; return { kind: "pick", product_id, size_code: p ? defaultSize(p, extra.size_code) : "standard", c1: d.c1, c2: d.c2, option_code: "standard", qty: 1, note: "", tag: "", untracked: false, ...extra }; };
 const isEncLine = (l) => (l.kind === "pick" ? l.product_id === "enclosure" : isEncText(l.text));
@@ -648,7 +660,7 @@ const encDoors = (size) => [...new Set(cat.variants.filter((v) => v.product_id =
 
 // a sale as the platform reported it -> a new order to review: one text line per item (title + the chosen variations), the buyer note as order notes
 export function formFromSource(s) {
-  const lines = (s.items || []).map((it) => ({ kind: "text", text: [srcTitle(it.title), ...(it.variations || []).map(([, v]) => v), it.personalization || ""].filter(Boolean).join(" - "), qty: Number(it.qty) || 1, note: "", tag: "", untracked: false, src: "paste" }));
+  const lines = (s.items || []).map((it) => ({ kind: "text", text: [srcTitle(it.title), ...(it.variations || []).map(([, v]) => v), it.personalization || ""].filter(Boolean).join(" - "), qty: Number(it.qty) || 1, note: "", tag: "", untracked: false, src: "paste" })).map((l) => ({ ...l, was: l.text }));
   return { customer: s.buyer || "", platform: [s.platform], order_number: s.number, order_date: s.order_date || isoDay(), ship_by: s.ship_by || "", state: s.state || "", summary: s.note || "", lines, source_id: s.id };
 }
 export function openOrderForm(order = null, focusUid = null, pre = null) {
@@ -814,7 +826,7 @@ function lineFromResolved(text, qty, x) {
   if (x && x.product_id && cat.byProduct.get(x.product_id)) { const a = x.add || {}; const byName = (nm) => { const k = normName(nm); const c = nm && [...cat.colors.values()].find((c) => normName(c.name) === k || (c.aliases || []).some((al) => normName(al) === k)); return c ? c.id : ""; };
     const c = x.color_scheme_id && cat.schemes.get(x.color_scheme_id) ? schemeColors(x.color_scheme_id) : { c1: byName(a.color_1), c2: byName(a.color_2) };
     return { ...pickLine(x.product_id, { size_code: x.size_code }), c1: c.c1, c2: c.c2, qty, src: "paste", said: text, ...dims }; }
-  return { kind: "text", text, qty, note: "", untracked: !!(x && x.status === "untracked") || (/\bplants?\b|cocoon|substrate|moss/i.test(text) && !(x && x.status === "variant")), src: "paste" };
+  return { kind: "text", text, was: text, qty, note: "", untracked: !!(x && x.status === "untracked") || (/\bplants?\b|cocoon|substrate|moss/i.test(text) && !(x && x.status === "variant")), src: "paste" };
 }
 async function reviewPaste(text) {
   const raws = String(text || "").split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
@@ -867,8 +879,8 @@ function wireForm(host, custs) {
   const addIn = host.querySelector("#addItem");
   const addLine = (line) => { read(); f.lines.push(line); formRender(); setTimeout(() => { const el = $("#odHost #addItem"); if (el) el.focus(); }, 30); };
   ta(addIn, addIn.closest(".ta").querySelector(".ta-list"), prodHits, (h) => addLine(pickLine(h.p.id, { size_code: encSize(f) || undefined })));
-  addIn.addEventListener("keydown", (e) => { if (e.key === "Enter" && addIn.value.trim() && (addIn.closest(".ta").querySelector(".ta-list").hidden)) { e.preventDefault(); const hits = searchProducts(addIn.value); if (hits.length === 1) addLine(pickLine(hits[0].p.id, { size_code: encSize(f) || undefined })); else addLine({ kind: "text", text: addIn.value.trim(), qty: 1, note: "", untracked: false }); } });
-  host.querySelectorAll(".li-text").forEach((inp) => ta(inp, inp.closest(".ta").querySelector(".ta-list"), prodHits, (h) => { read(); const i = +inp.dataset.l; const old = f.lines[i]; f.lines[i] = { ...pickLine(h.p.id, { size_code: encSize(f) || undefined }), uid: old.uid, qty: old.qty, note: old.note, group_uid: old.group_uid, print_state: old.print_state, packed: old.packed, said: cleanText(old.text) }; formRender(); }));
+  addIn.addEventListener("keydown", (e) => { if (e.key === "Enter" && addIn.value.trim() && (addIn.closest(".ta").querySelector(".ta-list").hidden)) { e.preventDefault(); const hits = searchProducts(addIn.value); if (hits.length === 1) addLine(pickLine(hits[0].p.id, { size_code: encSize(f) || undefined })); else addLine({ kind: "text", text: addIn.value.trim(), was: addIn.value.trim(), qty: 1, note: "", untracked: false }); } });
+  host.querySelectorAll(".li-text").forEach((inp) => ta(inp, inp.closest(".ta").querySelector(".ta-list"), prodHits, (h) => { read(); const i = +inp.dataset.l; const old = f.lines[i]; f.lines[i] = { ...pickLine(h.p.id, { size_code: encSize(f) || undefined }), uid: old.uid, qty: old.qty, note: old.note, group_uid: old.group_uid, print_state: old.print_state, packed: old.packed, said: old.was != null ? old.was : "" }; formRender(); }));
   // change a catalog line's item in place: keeps qty, notes, tag and its place; the old piece's print/pack status doesn't carry over (save_order resets it)
   host.querySelectorAll(".li-prod").forEach((inp) => { ta(inp, inp.closest(".ta").querySelector(".ta-list"), prodHits, (h) => { read(); const i = +inp.dataset.pl; const old = f.lines[i]; if (!old || h.p.id === old.product_id) { formRender(); return; }
     const keep = (h.p.size_codes || []).some((s) => s.code === old.size_code) ? old.size_code : encSize(f) || undefined;
@@ -878,7 +890,7 @@ function wireForm(host, custs) {
     if (t.matches("[data-f='collection']")) { const prev = f.collection; read(); const next = f.collection; f.collection = prev;
       if (next && f.lines.some((l) => l.src !== "collection" && l.src !== "enclosure") && !(await confirmBox({ title: "Replace the items?", body: "The collection's pieces replace what's listed now.", ok: "Replace" }))) { formRender(); return; }
       f.collection = next; f.choices = {}; f.need = []; if (!next) f.lines = f.lines.filter((l) => l.src !== "collection"); else { f.lines = f.lines.filter((l) => l.src === "collection" || l.src === "enclosure"); try { if ((await applyCollection(f)) === false) f.lines = f.lines.filter((l) => l.src !== "collection"); } catch (x) { f.collection = prev; f.need = []; toast(db.errText(x), true); } } formRender(); return; }
-    if (t.matches("[data-f],[data-l]")) { read(); if (t.dataset.lf && !["qty", "note", "size_1", "size_2", "size_3"].includes(t.dataset.lf)) formRender(); } if (t.matches("[data-r]")) { const l = F.review.lines[+t.dataset.r]; const k = t.dataset.rf; if (k === "qty") l.line.qty = Math.max(1, +t.value || 1); } };
+    if (t.matches("[data-f],[data-l]")) { read(); if (t.dataset.lf && !["qty", "note", "size_1", "size_2", "size_3"].includes(t.dataset.lf)) afterPress(() => { if (F.form === f && !F.busy) formRender(); }); } if (t.matches("[data-r]")) { const l = F.review.lines[+t.dataset.r]; const k = t.dataset.rf; if (k === "qty") l.line.qty = Math.max(1, +t.value || 1); } };
   host.ontoggle = (e) => { if (e.target.matches("[data-custfold]")) F.custOpen = e.target.open; };
   host.onclick = async (e) => {
     const t = e.target; let b;
@@ -930,6 +942,8 @@ async function linesForSave(ff, make = true) {
   }
   return out;
 }
+const openWord = (f, r) => { const n = r && r.unmatched; if (!n) return ""; const why = f.lines.map((l) => (l.kind === "pick" ? pickState(l) : RES.get(String(l.text || "").trim()))).filter((x) => x && x.status === "unresolved").map((x) => x.reason);
+  const same = why.length === n && new Set(why).size === 1 ? why[0] : ""; return ` · ${plural(n, "line")} ${same === "needs color" ? (n === 1 ? "needs a color" : "need a color") : same === "needs size" ? (n === 1 ? "needs a size" : "need a size") : "not in the catalog"}`; };
 async function saveForm() {
   const f = F.form; F.errors = validate(f); if (F.errors.length) { formRender(); return; }
   F.busy = true; formRender();
@@ -945,7 +959,7 @@ async function saveForm() {
       const r = await db.saveOrder(p); F.busy = false;
       // entered from a sale: link the sale to the new order (the order then carries the Review flag until confirmed)
       if (f.source_id && r && r.id) { try { await db.linkSource(f.source_id, r.id); } catch (x) { toast("Saved, but the sale could not be linked: " + db.errText(x), true); } }
-      if (r && Array.isArray(r.duplicates) && r.duplicates.length) toast(`Saved. Order #${f.order_number} is also on: ${r.duplicates.map((d) => d.customer).join(", ")}`, true); else toast(`Saved ${f.customer.trim()}${r && r.unmatched ? ` · ${plural(r.unmatched, "line")} not in the catalog` : ""}`);
+      if (r && Array.isArray(r.duplicates) && r.duplicates.length) toast(`Saved. Order #${f.order_number} is also on: ${r.duplicates.map((d) => d.customer).join(", ")}`, true); else toast(`Saved ${f.customer.trim()}${openWord(f, r)}`);
       closeForm(); await load(); if (cat.stale) await loadCatalog(); return;
     }
     // edit: apply only what changed, on top of the freshest copy of the order
@@ -959,7 +973,7 @@ async function saveForm() {
       return out;
     });
     F.busy = false;
-    if (r && Array.isArray(r.duplicates) && r.duplicates.length) toast(`Saved. Order #${f.order_number} is also on: ${r.duplicates.map((d) => d.customer).join(", ")}`, true); else toast(`Saved ${f.customer.trim()}${r && r.unmatched ? ` · ${plural(r.unmatched, "line")} not in the catalog` : ""}`);
+    if (r && Array.isArray(r.duplicates) && r.duplicates.length) toast(`Saved. Order #${f.order_number} is also on: ${r.duplicates.map((d) => d.customer).join(", ")}`, true); else toast(`Saved ${f.customer.trim()}${openWord(f, r)}`);
     closeForm(); await reloadOrder(f.id); if (cat.stale) await loadCatalog(); load();
   } catch (e) { F.busy = false; F.errors = [db.errText(e)]; formRender(); }
 }
