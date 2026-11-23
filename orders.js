@@ -196,10 +196,10 @@ export function eff(l) {
 }
 export const canPack = (l) => { const e = eff(l); return e.st === "packed" || e.st === "shelf" || e.st === "printed" || e.kind !== "print" || e.st === "out"; };
 export const unpacked = (o) => (o.lines || []).filter((l) => !l.packed).length;
-// stock that comes off the shelf when this order is marked Done
+// stock that still comes off the shelf when this order is marked Done (a packed line took its pieces when it was ticked)
 export function movesFor(o) {
   const out = new Map();
-  for (const l of o.lines || []) { const r = invRowOf(l); if (!r || r.in_stock == null) continue; const e = eff(l); const n = e.st === "shelf" ? (Number(l.qty) || 1) : e.st === "packed" && e.from === "shelf" ? (Number(l.qty) || 1) : e.st === "out" && e.a > 0 ? e.a : e.part ? e.a : 0; if (n > 0) out.set(r.id, (out.get(r.id) || 0) + n); }
+  for (const l of o.lines || []) { const r = invRowOf(l); if (!r || r.in_stock == null) continue; const e = eff(l); const n = e.st === "shelf" ? (Number(l.qty) || 1) : e.st === "out" && e.a > 0 ? e.a : e.part ? e.a : 0; if (n > 0) out.set(r.id, (out.get(r.id) || 0) + n); }
   return [...out.entries()].map(([notion_id, qty]) => ({ notion_id, qty }));
 }
 
@@ -219,7 +219,7 @@ export async function setStatus(o, status) {
   if (status === "Done") {
     const left = unpacked(o); if (left) { setErr(key, `Pack all items first: ${plural(left, "item")} not ticked packed`); emit(); return false; }
     const mv = movesFor(o);
-    const what = mv.length ? `<br><br>Comes off the shelf: ${mv.map((m) => `${m.qty} × ${esc((store.invById.get(m.notion_id) || {}).item || m.notion_id)}`).join(", ")}.` : "<br><br>Nothing comes off the shelf (every piece was printed fresh).";
+    const what = mv.length ? `<br><br>Comes off the shelf: ${mv.map((m) => `${m.qty} × ${esc((store.invById.get(m.notion_id) || {}).item || m.notion_id)}`).join(", ")}.` : "";
     const ok = await confirmBox({ title: "Mark order Done?", body: `${esc(o.customer)} will be marked <b>Done</b> (shipped) and leave the board.${what}`, ok: "Yes, mark Done" });
     if (!ok) { emit(); return false; }
     let short = [];
@@ -238,7 +238,7 @@ export async function undoDone(id) {
   const q = recentDone.find((x) => x.id === id); const o = store.orders.find((x) => x.id === id);
   const prev = (q && q.prev) || (o && o.done_prev); const status = prev && obPick(prev) !== "Done" ? obPick(prev) : "Not started";
   const ok = await act("o:" + id, () => db.saveWithRetry(id, (p) => ({ ...p, status }), { undo: true }), { reload: id });
-  if (ok) { const i = recentDone.findIndex((x) => x.id === id); if (i >= 0) recentDone.splice(i, 1); toast(((q && q.customer) || (o && o.customer) || "Order") + " is back on the board. Shelf pieces were put back"); }
+  if (ok) { const i = recentDone.findIndex((x) => x.id === id); if (i >= 0) recentDone.splice(i, 1); toast(((q && q.customer) || (o && o.customer) || "Order") + " is back on the board"); }
   else toast("Undo didn't save: " + (store.errs["o:" + id] || ""), true);
   return ok;
 }
@@ -491,7 +491,7 @@ function binWire() {
     if ((b = t.closest("[data-donetog]"))) { const id = b.dataset.donetog; if (BIN.doneOpen.has(id)) BIN.doneOpen.delete(id); else BIN.doneOpen.add(id); binRender(); return; }
     if ((b = t.closest("[data-donemore]"))) { BIN.doneLimit += 40; binRender(); return; }
     if ((b = t.closest("[data-doneundo]"))) { const o = orderOf(b.dataset.doneundo); if (!o) return; const to = o.done_prev && obPick(o.done_prev) !== "Done" ? obPick(o.done_prev) : "Not started";
-      if (await confirmBox({ title: "Put back on the board?", body: `${esc(o.customer)} goes back to <b>${esc(to)}</b>. Any pieces it took off the shelf go back to Inventory.`, ok: "Put back" })) undoDone(o.id); return; }
+      if (await confirmBox({ title: "Put back on the board?", body: `${esc(o.customer)} goes back to <b>${esc(to)}</b>. Packed pieces stay off the shelf until they are unticked.`, ok: "Put back" })) undoDone(o.id); return; }
     if ((b = t.closest("[data-det]"))) { BIN.pinned[b.dataset.det] = !BIN.pinned[b.dataset.det]; binRender(); return; }
     if ((b = t.closest("[data-review]"))) { const o = orderOf(b.dataset.review); if (o) confirmReview(o); return; }
     if ((b = t.closest("[data-obedit]"))) { e.stopPropagation(); openOrderForm(orderOf(b.dataset.obedit)); return; }
