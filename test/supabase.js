@@ -41,7 +41,7 @@ export class RpcError extends Error {
 export const errText = (e) => (e instanceof RpcError ? e.message : String((e && e.message) || e || "Something went wrong"));
 
 /* when this tab last wrote: a read that started before a write and finished after it is older than what the screen shows, and is thrown away */
-const READS = new Set(["read_orders", "inventory_rows", "catalog_options", "resolve_lines", "read_app_state", "pick_collection", "read_collections", "read_item", "backup_data"]);
+const READS = new Set(["read_orders", "inventory_rows", "catalog_options", "resolve_lines", "read_app_state", "pick_collection", "read_collections", "read_item", "backup_data", "read_recipes", "unlinked_sources"]);
 let writeAt = 0;
 export const lastWriteAt = () => writeAt;
 export async function rpc(fn, args = {}) {
@@ -76,6 +76,10 @@ export const archiveVariant = (id) => rpc("archive_variant", { p_id: id });
 export const unlinkedSources = () => rpc("unlinked_sources");
 export const confirmReview = (id) => rpc("confirm_review", { p_order_id: id, p_by: by() });
 export const linkSource = (sourceId, orderId) => rpc("link_source", { p_source_id: sourceId, p_order_id: orderId, p_by: by() });
+// listing recipes: what a person entered for each item of a sale (record_cases), the recipes waiting for an owner, and the owner's answer
+export const recordCases = (sourceId, orderId, items) => rpc("record_cases", { p_source_id: sourceId, p_order_id: orderId, p_items: items, p_by: by() });
+export const readRecipes = () => rpc("read_recipes");
+export const decideRecipe = (key, decision) => rpc("decide_recipe", { p_key: key, p_decision: decision, p_by: by() });
 export const dismissSource = (sourceId, why) => rpc("dismiss_source", { p_source_id: sourceId, p_why: why, p_by: by() });
 export const readAppState = (keys = null, known = {}) => rpc("read_app_state", { keys, known });
 

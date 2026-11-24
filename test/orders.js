@@ -63,7 +63,7 @@ let loadSeq = 0;
 export async function load({ done = false } = {}) {
   const started = Date.now(); const seq = ++loadSeq;
   try {
-    const [open, doneRows, inv, opts, srcs] = await Promise.all([db.readOrders("open"), done ? db.readOrders("done") : null, db.inventoryRows(), cat.opts && !cat.stale ? null : db.catalogOptions(), db.unlinkedSources().catch((e) => { console.error(e); return null; })]);
+    const [open, doneRows, inv, opts, srcs, recs] = await Promise.all([db.readOrders("open"), done ? db.readOrders("done") : null, db.inventoryRows(), cat.opts && !cat.stale ? null : db.catalogOptions(), db.unlinkedSources().catch((e) => { console.error(e); return null; }), db.readRecipes().catch((e) => { console.error(e); return null; })]);
     // something was saved (or a newer read started) while this read was in flight: this copy is already behind what the screen shows
     if (seq !== loadSeq) return;
     if (db.lastWriteAt() > started) { return load({ done }); }
@@ -74,6 +74,7 @@ export async function load({ done = false } = {}) {
     store.orders = [...openList, ...doneList];
     store.inv = Array.isArray(inv) ? inv : [];
     if (Array.isArray(srcs)) store.sources = srcs;
+    if (Array.isArray(recs)) store.recipes = recs;
     store.invById = new Map(store.inv.map((r) => [r.id, r]));
     store.loadedAt = new Date(); store.err = "";
     recompute();
@@ -370,6 +371,8 @@ const srcTitle = (t) => { const s = String(t || ""); const i = s.indexOf(" | ");
 export const srcItemHtml = (it) => `<div class="nsrcline"><b>${Number(it.qty) > 1 ? esc(it.qty) + " × " : ""}${esc(srcTitle(it.title))}</b>${(it.variations || []).length ? `<span class="nsrcvar">${it.variations.map(([k, v]) => `<span title="${esc(k)}">${esc(v)}</span>`).join("")}</span>` : ""}${it.personalization ? `<span class="nsrcvar"><span>${esc(it.personalization)}</span></span>` : ""}</div>`;
 export const confirmReview = (o) => act("o:" + o.id, () => db.confirmReview(o.id), { reload: o.id });
 // the sale(s) behind an order, shown under the status row: always the number; the items while the order awaits review
+// a recipe waiting for an owner: the listing and its options, the pieces it would fill in, and the answer
+const recipeHtml = (r, i) => `<div class="nsrcsale"><div class="nsrchead"><span class="np np-orange">${r.status === "review" ? "Recipe corrected" : "Recipe?"}</span><span class="np np-${platColor(r.platform)}">${esc(r.platform)}</span><span class="sub">entered this way ${esc(r.cases)}×</span><button type="button" class="btn mini accent" data-recipe="${i}" data-dec="confirm">Use</button><button type="button" class="btn ghost mini" data-recipe="${i}" data-dec="decline" style="margin-left:0">Don't</button></div>${srcItemHtml({ title: r.title, variations: r.variations, qty: 1 })}${(r.lines || []).map((l) => `<div class="nsrcline">→ ${Number(l.qty) > 1 ? esc(l.qty) + " × " : ""}${esc(l.name || "")}</div>`).join("")}</div>`;
 const sourcesHtml = (o) => {
   const ss = o.sources || []; if (!ss.length) return "";
   const pending = o.review === "pending"; const busy = store.busy.has("o:" + o.id);
@@ -416,7 +419,7 @@ function binDraw(box) {
   const nocat = store.open.reduce((n, o) => n + (o.lines || []).filter((l) => l.match === "unmatched" && !isEncText(l.text)).length, 0);
   const review = store.open.filter((o) => o.review === "pending").length;
   if (st) st.textContent = store.err ? "⚠ " + store.err : store.loadedAt ? `${plural(store.open.length, "open order")}${nocat ? ` · ⚠ ${plural(nocat, "line")} not in the catalog` : ""}${review ? ` · ${review} to review` : ""} · synced ${store.loadedAt.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })} · refreshes every 20 s` : "Reading orders…";
-  const ns = $("#binSources"); if (ns) { const s = store.sources || []; ns.hidden = !s.length || BIN.mode === "done"; ns.innerHTML = s.length ? `<div class="nsrchead"><span class="np np-orange">⚠ ${plural(s.length, "sale")} not entered</span></div>${s.map((x) => `<div class="nsrcsale"><div class="nsrchead"><b>${esc(x.buyer || "")}</b><span class="np np-${platColor(x.platform)}">${esc(x.platform)} #${esc(x.number)}</span><span class="sub">ordered ${esc(fmtDay(x.order_date))}${x.ship_by ? ` · ship by ${esc(fmtDay(x.ship_by))}` : ""}</span><button type="button" class="btn ghost mini" data-srcnew="${x.id}">+ Enter order</button></div>${(x.items || []).map(srcItemHtml).join("")}${x.note ? `<div class="nsrcnote">${esc(x.note)}</div>` : ""}</div>`).join("")}` : ""; }
+  const ns = $("#binSources"); if (ns) { const s = store.sources || []; const rc = store.recipes || []; ns.hidden = (!s.length && !rc.length) || BIN.mode === "done"; ns.innerHTML = rc.map(recipeHtml).join("") + (s.length ? `<div class="nsrchead"><span class="np np-orange">⚠ ${plural(s.length, "sale")} not entered</span></div>${s.map((x) => `<div class="nsrcsale"><div class="nsrchead"><b>${esc(x.buyer || "")}</b><span class="np np-${platColor(x.platform)}">${esc(x.platform)} #${esc(x.number)}</span><span class="sub">ordered ${esc(fmtDay(x.order_date))}${x.ship_by ? ` · ship by ${esc(fmtDay(x.ship_by))}` : ""}</span><button type="button" class="btn ghost mini" data-srcnew="${x.id}">+ Enter order</button></div>${(x.items || []).map(srcItemHtml).join("")}${x.note ? `<div class="nsrcnote">${esc(x.note)}</div>` : ""}</div>`).join("")}` : ""); }
   const sel = $("#binPlat"); if (sel) { const plats = [...new Set(store.orders.flatMap((o) => o.platform || []))].sort(); const cur = sel.value; sel.innerHTML = `<option value="">All platforms</option>` + plats.map((p) => `<option ${p === cur ? "selected" : ""}>${esc(p)}</option>`).join(""); }
   document.querySelectorAll("[data-binlay]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.binlay === BIN.layout)));
   document.querySelectorAll("[data-binmode]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.binmode === BIN.mode)));
@@ -476,7 +479,7 @@ function binScrollbar(bar, board) {
 
 function binWire() {
   const box = $("#binList");
-  const srcBox = $("#binSources"); if (srcBox) srcBox.addEventListener("click", (e) => { const b = e.target.closest("[data-srcnew]"); if (!b) return; const s = (store.sources || []).find((x) => String(x.id) === b.dataset.srcnew); if (s) openOrderForm(null, null, formFromSource(s)); });
+  const srcBox = $("#binSources"); if (srcBox) srcBox.addEventListener("click", async (e) => { const rb = e.target.closest("[data-recipe]"); if (rb) { const r = (store.recipes || [])[+rb.dataset.recipe]; if (!r || rb.disabled) return; srcBox.querySelectorAll("[data-recipe]").forEach((x) => (x.disabled = true)); try { await db.decideRecipe(r.key, rb.dataset.dec); toast(rb.dataset.dec === "confirm" ? "Recipe in use" : "Recipe not used"); } catch (x) { toast("⚠ " + db.errText(x), true); } await load(); return; } const b = e.target.closest("[data-srcnew]"); if (!b) return; const s = (store.sources || []).find((x) => String(x.id) === b.dataset.srcnew); if (s) openOrderForm(null, null, formFromSource(s)); });
   $("#binSearch").oninput = () => { BIN.doneLimit = 40; binRender(); }; $("#binPlat").onchange = () => { BIN.doneLimit = 40; binRender(); };
   document.addEventListener("click", (e) => { const b = e.target.closest("[data-binmode]"); if (!b || BIN.mode === b.dataset.binmode) return; BIN.mode = b.dataset.binmode; BIN.doneLimit = 40; BIN.open = null; BIN.stOpen = null; binRender(); if (BIN.mode === "done") load({ done: true }); });
   $("#binDays").addEventListener("click", (e) => { const b = e.target.closest("[data-day]"); if (!b) return; const k = b.dataset.day; if (k === "all") BIN.days = []; else BIN.days = BIN.days.includes(k) ? BIN.days.filter((x) => x !== k) : [...BIN.days, k]; binRender(); });
@@ -660,8 +663,28 @@ const encDoors = (size) => [...new Set(cat.variants.filter((v) => v.product_id =
 
 // a sale as the platform reported it -> a new order to review: one text line per item (title + the chosen variations), the buyer note as order notes
 export function formFromSource(s) {
-  const lines = (s.items || []).map((it) => ({ kind: "text", text: [srcTitle(it.title), ...(it.variations || []).map(([, v]) => v), it.personalization || ""].filter(Boolean).join(" - "), qty: Number(it.qty) || 1, note: "", tag: "", untracked: false, src: "paste" })).map((l) => ({ ...l, was: l.text }));
-  return { customer: s.buyer || "", platform: [s.platform], order_number: s.number, order_date: s.order_date || isoDay(), ship_by: s.ship_by || "", state: s.state || "", summary: s.note || "", lines, source_id: s.id };
+  // an item with a confirmed recipe arrives as its pieces; any other item as one text line. Each line remembers its sale item (si).
+  const lines = (s.items || []).flatMap((it, si) => {
+    const n = Number(it.qty) || 1; const rl = it.recipe && Array.isArray(it.recipe.lines) ? it.recipe.lines : null;
+    if (rl && rl.every((x) => x.variant_id == null || cat.varById.get(String(x.variant_id)))) return rl.map((x) => {
+      const q = (Number(x.qty) || 1) * n; const v = x.variant_id != null ? cat.varById.get(String(x.variant_id)) : null;
+      if (!v) return { kind: "text", text: x.text, was: x.text, qty: q, note: "", tag: x.tag || "", untracked: true, src: "recipe", si };
+      const c = schemeColors(v.color_scheme_id); return { kind: "pick", product_id: v.product_id, size_code: v.size_code, c1: c.c1, c2: c.c2, option_code: v.option_code || "standard", qty: q, note: "", tag: x.tag || "", untracked: false, src: "recipe", said: "", si };
+    });
+    const text = [srcTitle(it.title), ...(it.variations || []).map(([, v]) => v), it.personalization || ""].filter(Boolean).join(" - ");
+    return [{ kind: "text", text, was: text, qty: n, note: "", tag: "", untracked: false, src: "paste", si }];
+  });
+  return { customer: s.buyer || "", platform: [s.platform], order_number: s.number, order_date: s.order_date || isoDay(), ship_by: s.ship_by || "", state: s.state || "", summary: s.note || "", lines, source_id: s.id, source_items: (s.items || []).length };
+}
+// after an order entered from a sale is saved: what was entered for each sale item, as the database saved it. One item: every line is its (gifts aside).
+// Several items: only when every line still says which item it came from; a line added by hand could belong to any of them, so nothing is recorded.
+async function recordSaleCases(f, orderId) {
+  const o = await db.readOrder(orderId); const saved = [...((o && o.lines) || [])].sort((a, b) => a.line_no - b.line_no);
+  if (saved.length !== f.lines.length) return;
+  const rows = f.lines.map((l, i) => ({ si: l.si, x: saved[i] })).filter((r) => r.x.tag !== "gift");
+  const one = f.source_items === 1; if (!one && rows.some((r) => r.si == null)) return;
+  const by = new Map(); for (const r of rows) { const k = one ? 0 : r.si; if (!by.has(k)) by.set(k, []); by.get(k).push({ variant_id: r.x.variant_id ?? null, text: r.x.text, untracked: r.x.match === "untracked", qty: r.x.qty, tag: r.x.tag || "", size_1: r.x.size_1 ?? null }); }
+  if (by.size) await db.recordCases(f.source_id, orderId, [...by].map(([item_no, lines]) => ({ item_no, lines })));
 }
 export function openOrderForm(order = null, focusUid = null, pre = null) {
   const start = () => {
@@ -880,11 +903,11 @@ function wireForm(host, custs) {
   const addLine = (line) => { read(); f.lines.push(line); formRender(); setTimeout(() => { const el = $("#odHost #addItem"); if (el) el.focus(); }, 30); };
   ta(addIn, addIn.closest(".ta").querySelector(".ta-list"), prodHits, (h) => addLine(pickLine(h.p.id, { size_code: encSize(f) || undefined })));
   addIn.addEventListener("keydown", (e) => { if (e.key === "Enter" && addIn.value.trim() && (addIn.closest(".ta").querySelector(".ta-list").hidden)) { e.preventDefault(); const hits = searchProducts(addIn.value); if (hits.length === 1) addLine(pickLine(hits[0].p.id, { size_code: encSize(f) || undefined })); else addLine({ kind: "text", text: addIn.value.trim(), was: addIn.value.trim(), qty: 1, note: "", untracked: false }); } });
-  host.querySelectorAll(".li-text").forEach((inp) => ta(inp, inp.closest(".ta").querySelector(".ta-list"), prodHits, (h) => { read(); const i = +inp.dataset.l; const old = f.lines[i]; f.lines[i] = { ...pickLine(h.p.id, { size_code: encSize(f) || undefined }), uid: old.uid, qty: old.qty, note: old.note, group_uid: old.group_uid, print_state: old.print_state, packed: old.packed, said: old.was != null ? old.was : "" }; formRender(); }));
+  host.querySelectorAll(".li-text").forEach((inp) => ta(inp, inp.closest(".ta").querySelector(".ta-list"), prodHits, (h) => { read(); const i = +inp.dataset.l; const old = f.lines[i]; f.lines[i] = { ...pickLine(h.p.id, { size_code: encSize(f) || undefined }), uid: old.uid, qty: old.qty, note: old.note, group_uid: old.group_uid, print_state: old.print_state, packed: old.packed, said: old.was != null ? old.was : "", si: old.si }; formRender(); }));
   // change a catalog line's item in place: keeps qty, notes, tag and its place; the old piece's print/pack status doesn't carry over (save_order resets it)
   host.querySelectorAll(".li-prod").forEach((inp) => { ta(inp, inp.closest(".ta").querySelector(".ta-list"), prodHits, (h) => { read(); const i = +inp.dataset.pl; const old = f.lines[i]; if (!old || h.p.id === old.product_id) { formRender(); return; }
     const keep = (h.p.size_codes || []).some((s) => s.code === old.size_code) ? old.size_code : encSize(f) || undefined;
-    f.lines[i] = { ...pickLine(h.p.id, { size_code: keep }), uid: old.uid, qty: old.qty, note: old.note, tag: old.tag, group_uid: old.group_uid, src: old.src, said: old.said || "" }; formRender(); });
+    f.lines[i] = { ...pickLine(h.p.id, { size_code: keep }), uid: old.uid, qty: old.qty, note: old.note, tag: old.tag, group_uid: old.group_uid, src: old.src, said: old.said || "", si: old.si }; formRender(); });
     inp.addEventListener("blur", () => setTimeout(() => { if (document.activeElement !== inp) inp.value = inp.dataset.was; }, 150)); });
   host.onchange = async (e) => { const t = e.target; if (F.drawing) return;
     if (t.matches("[data-f='collection']")) { const prev = f.collection; read(); const next = f.collection; f.collection = prev;
@@ -958,7 +981,8 @@ async function saveForm() {
       p.freebie = lines.filter((l) => l.tag === "gift").map((l) => l.text);
       const r = await db.saveOrder(p); F.busy = false;
       // entered from a sale: link the sale to the new order (the order then carries the Review flag until confirmed)
-      if (f.source_id && r && r.id) { try { await db.linkSource(f.source_id, r.id); } catch (x) { toast("Saved, but the sale could not be linked: " + db.errText(x), true); } }
+      if (f.source_id && r && r.id) { try { await db.linkSource(f.source_id, r.id); } catch (x) { toast("Saved, but the sale could not be linked: " + db.errText(x), true); }
+        try { await recordSaleCases(f, r.id); } catch (x) { toast("Saved, but the sale's pieces were not kept for learning: " + db.errText(x), true); } }
       if (r && Array.isArray(r.duplicates) && r.duplicates.length) toast(`Saved. Order #${f.order_number} is also on: ${r.duplicates.map((d) => d.customer).join(", ")}`, true); else toast(`Saved ${f.customer.trim()}${openWord(f, r)}`);
       closeForm(); await load(); if (cat.stale) await loadCatalog(); return;
     }
