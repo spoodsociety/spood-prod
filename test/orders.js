@@ -661,6 +661,55 @@ const encDoorOf = (f) => { const e = f.lines.find((l) => l.kind === "pick" && l.
 // door options the catalog has for an enclosure size (standard = latch door); a size with only one door shows no choice
 const encDoors = (size) => [...new Set(cat.variants.filter((v) => v.product_id === "enclosure" && v.size_code === size && !v.archived).map((v) => v.option_code || "standard"))].sort((a, b) => (a === "standard" ? -1 : 1) - (b === "standard" ? -1 : 1));
 
+/* sale-parse:start */
+// A sale item's listing words -> catalog pieces. A suggestion only: the person reviews the form, and nothing is saved until they save.
+// Each piece named in the title is matched on its words against item names and their confirmed other names. When a piece could be two items,
+// the collection the rest of the listing points to decides; if that doesn't settle it, the words stay a text line for a person. Never a guess.
+const SALE_NOISE = new Set(["set", "of", "the", "a", "an", "with", "for", "on"]);
+const saleTokens = (s) => [...new Set(String(s || "").toLowerCase().replace(/&amp;/g, "&").replace(/climbing walls?|wall climbs?/g, "climb").replace(/shel(f|ves)/g, "ledge").replace(/[^a-z0-9]+/g, " ").split(" ").filter((t) => t && !SALE_NOISE.has(t)).map((t) => (t.length > 3 && t.endsWith("s") && !t.endsWith("ss") ? t.slice(0, -1) : t)))];
+let saleIdx = null, saleIdxFor = null;
+function saleIndex() {
+  if (saleIdx && saleIdxFor === cat.opts) return saleIdx;
+  const rows = [];
+  for (const p of cat.byProduct.values()) { const seen = new Set(); for (const n of [p.name, ...(p.aliases || [])]) { const ts = saleTokens(n); const k = ts.slice().sort().join(" "); if (!ts.length || seen.has(k)) continue; seen.add(k); rows.push({ p, ts }); } }
+  saleIdxFor = cat.opts; return (saleIdx = rows);
+}
+// every item whose name (or other name) is wholly inside these words, with how many words matched
+function saleHits(text) { const ft = new Set(saleTokens(text)); const by = new Map(); if (ft.size) for (const r of saleIndex()) if (r.ts.every((t) => ft.has(t)) && r.ts.length > (by.get(r.p.id) || 0)) by.set(r.p.id, r.ts.length); return [...by].map(([id, n]) => ({ p: cat.byProduct.get(id), n })); }
+const topHits = (hits) => { const m = Math.max(0, ...hits.map((h) => h.n)); return hits.filter((h) => h.n === m); };
+const saleColor = (v) => { const s = String(v || "").trim().toLowerCase(); for (const c of cat.colors.values()) if (c.name.toLowerCase() === s || (c.aliases || []).some((a) => a.toLowerCase() === s)) return c.id; return ""; };
+const saleSize = (p, v) => { const s = String(v || "").trim().toLowerCase(); const codes = p.size_codes || []; const f = codes.find((x) => x.name.toLowerCase() === s || x.code === s); if (f) return f.code; return s === "standard" && codes.some((x) => x.code === "small") ? "small" : ""; };
+export function parseSaleItem(it, si) {
+  const n = Number(it.qty) || 1; const clean = (s) => String(s || "").replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&#39;/g, "'").trim();
+  const vars = (it.variations || []).map(([k, v]) => ({ k: clean(k), v: clean(v) }));
+  const frags = clean(srcTitle(it.title)).split(/\s*(?:,|&|\+|\band\b)\s*/i).map((s) => s.trim()).filter(Boolean).map((text) => ({ text, qty: n, addon: false }));
+  for (const x of vars) if (/add[\s-]?ons?/i.test(x.k)) { x.used = true; if (/^no\b|^none\b/i.test(x.v)) continue; for (const part of x.v.split(/\s*\+\s*/)) { const m = /^(\d+)\s+(.+)$/.exec(part.trim()); const text = (m ? m[2] : part).trim(); if (text) frags.push({ text, qty: n * (m ? Number(m[1]) : 1), addon: true }); } }
+  for (const f of frags) f.hits = saleHits(f.text);
+  // the collection the listing points to: each piece votes for the collections of its best matches
+  const votes = new Map(); for (const f of frags) if (!f.addon) { const top = topHits(f.hits); for (const h of top) for (const c of h.p.collections || []) votes.set(c, (votes.get(c) || 0) + 1 / top.length); }
+  const best = [...votes].sort((a, b) => b[1] - a[1]); const coll = best.length && (best.length === 1 || best[0][1] > best[1][1]) ? best[0][0] : "";
+  for (const f of frags) { const pool = f.addon || !coll ? f.hits : f.hits.filter((h) => (h.p.collections || []).includes(coll)); const top = topHits(pool); f.p = top.length === 1 ? top[0].p : null; }
+  if (!frags.some((f) => f.p && !f.addon)) return null;
+  const lines = frags.map((f) => (f.p ? { f, ...pickLine(f.p.id, {}), qty: f.qty, tag: f.addon ? "addon" : "", src: "parse", said: f.text, si } : { f, kind: "text", text: f.text, was: f.text, qty: f.qty, note: "", tag: "", untracked: false, src: "paste", si }));
+  // each option goes to the piece its name points at (Wall Climb (Sizes) -> the climb); with one piece, to that piece
+  const main = lines.filter((l) => !l.f.addon); const STOP = new Set(["size", "color", "colour", "select", "choose", "custom", "option"]);
+  for (const x of vars) { if (x.used) continue;
+    const kt = saleTokens(x.k).filter((t) => !STOP.has(t)); let tgt = null;
+    if (main.length === 1) tgt = main[0];
+    else if (kt.length) { const sc = main.map((l) => { const ws = new Set([...saleTokens(l.f.text), ...(l.kind === "pick" ? saleTokens(l.f.p.name) : [])]); return kt.filter((t) => ws.has(t)).length; }); const m = Math.max(...sc); if (m * 2 > kt.length && sc.filter((s) => s === m).length === 1) tgt = main[sc.indexOf(m)]; }
+    // an option that names a piece the title didn't (Space Rock Ledge: Space Grey) is that piece, in that color
+    if (!tgt) { const pool = saleHits(x.k).filter((h) => !coll || (h.p.collections || []).includes(coll)); const top = topHits(pool); const c = saleColor(x.v);
+      if (top.length === 1 && c && !lines.some((l) => l.kind === "pick" && l.product_id === top[0].p.id)) { const f = { text: x.k, addon: false, p: top[0].p, colored: 1 }; lines.push({ f, ...pickLine(f.p.id, {}), c1: c, c2: "", qty: n, tag: "", src: "parse", said: x.k + " - " + x.v, si }); }
+      continue; }
+    const add = () => { if (tgt.kind === "pick") tgt.said += " - " + x.v; else { tgt.text += " - " + x.v; tgt.was = tgt.text; } };
+    if (tgt.kind === "pick" && !/custom/i.test(x.k)) { const sz = saleSize(tgt.f.p, x.v); if (sz) { tgt.size_code = sz; add(); continue; } const c = saleColor(x.v); if (c) { if (!tgt.f.colored) { tgt.c1 = c; tgt.c2 = ""; tgt.f.colored = 1; } else if (tgt.f.colored === 1) { tgt.c2 = c; tgt.f.colored = 2; } add(); continue; } }
+    add();
+  }
+  // a sale read in with no size option is Small (Frankie, Nov 20)
+  for (const l of lines) if (l.kind === "pick" && !l.size_code && (l.f.p.size_codes || []).some((s) => s.code === "small")) l.size_code = "small";
+  return lines.map(({ f, ...l }) => l);
+}
+/* sale-parse:end */
 // a sale as the platform reported it -> a new order to review: one text line per item (title + the chosen variations), the buyer note as order notes
 export function formFromSource(s) {
   // an item with a confirmed recipe arrives as its pieces; any other item as one text line. Each line remembers its sale item (si).
@@ -671,6 +720,7 @@ export function formFromSource(s) {
       if (!v) return { kind: "text", text: x.text, was: x.text, qty: q, note: "", tag: x.tag || "", untracked: true, src: "recipe", si };
       const c = schemeColors(v.color_scheme_id); return { kind: "pick", product_id: v.product_id, size_code: v.size_code, c1: c.c1, c2: c.c2, option_code: v.option_code || "standard", qty: q, note: "", tag: x.tag || "", untracked: false, src: "recipe", said: "", si };
     });
+    const parsed = it.personalization ? null : parseSaleItem(it, si); if (parsed) return parsed;
     const text = [srcTitle(it.title), ...(it.variations || []).map(([, v]) => v), it.personalization || ""].filter(Boolean).join(" - ");
     return [{ kind: "text", text, was: text, qty: n, note: "", tag: "", untracked: false, src: "paste", si }];
   });
