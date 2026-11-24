@@ -1,8 +1,10 @@
 // Data layer: one supabase-js client on schema hq. Reads and writes go through RPCs only.
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.1/+esm";
 
-export const URL = "https://hkllbpipcfzzppbgkzrh.supabase.co";
-export const KEY = "sb_publishable_Vd1J6IVnTCP6zRR3CPz9gg_UWx1juTH";
+// Which database: a page under /test/ uses the test copy (ibjgaqpzlkcjcuhyedhg). Every other address uses the shop's live one.
+export const TEST = /^\/test\//.test(location.pathname);
+export const URL = TEST ? "https://ibjgaqpzlkcjcuhyedhg.supabase.co" : "https://hkllbpipcfzzppbgkzrh.supabase.co";
+export const KEY = TEST ? "sb_publishable_ezyIsF8UUgd-g_udrC7bzg_HKAuVsS1" : "sb_publishable_Vd1J6IVnTCP6zRR3CPz9gg_UWx1juTH";
 export const sb = createClient(URL, KEY, { db: { schema: "hq" } });
 
 /* ---------- who is signed in (Supabase Auth; the database refuses every call without a session) ---------- */

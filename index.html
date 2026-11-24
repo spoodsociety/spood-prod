@@ -609,6 +609,9 @@ header.top{background-color:var(--bg);background-image:conic-gradient(var(--chec
 @media (min-width:621px){.card{border-radius:24px}}
 .kpi,.kpi:nth-child(4n+2),.kpi:nth-child(4n+3),.kpi:nth-child(4n+4){background:var(--surface);color:var(--fg);box-shadow:var(--bub-sm)}
 .kpi span,.kpi small{color:var(--muted)}
+/* test copy (address under /test/): a frame and a tag on every screen, so it is never taken for the shop's own */
+body.testcopy::before{content:"";position:fixed;inset:0;border:6px solid #1d6fd6;pointer-events:none;z-index:9998}
+body.testcopy::after{content:"TEST COPY";position:fixed;top:0;left:50%;transform:translateX(-50%);padding:5px 16px 6px;border-radius:0 0 12px 12px;background:#1d6fd6;color:#fff;font:800 .8rem/1 system-ui,sans-serif;letter-spacing:.12em;pointer-events:none;z-index:9999}
 </style>
 </head>
 <body>
@@ -665,12 +668,14 @@ header.top{background-color:var(--bg);background-image:conic-gradient(var(--chec
 <div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
 <div id="modalHost"></div>
 
-<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611231634","./orders.js":"./orders.js?v=2611231634","./printplan.js":"./printplan.js?v=2611231634","./inventory.js":"./inventory.js?v=2611231634","./collections.js":"./collections.js?v=2611231634","./items.js":"./items.js?v=2611231634"}}</script>
+<script type="importmap">{"imports":{"./supabase.js":"./supabase.js?v=2611232330","./orders.js":"./orders.js?v=2611232330","./printplan.js":"./printplan.js?v=2611232330","./inventory.js":"./inventory.js?v=2611232330","./collections.js":"./collections.js?v=2611232330","./items.js":"./items.js?v=2611232330"}}</script>
 <script type="module">
 import * as db from "./supabase.js";
 import * as orders from "./orders.js";
 import * as plan from "./printplan.js";
 import * as inv from "./inventory.js";
+
+if (db.TEST) { document.body.classList.add("testcopy"); document.title = "TEST · " + document.title; }
 
 // nothing fails silently: an error nobody caught is shown, not just logged
 window.addEventListener("error", (e) => orders.toast("⚠ " + ((e.error && e.error.message) || e.message || "Something went wrong") + " — reload the page if it persists", true));
