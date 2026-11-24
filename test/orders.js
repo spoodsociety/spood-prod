@@ -880,7 +880,7 @@ function formDraw(f, host) {
     <div class="ta"><label class="f">Add an item<input id="addItem" autocomplete="off" placeholder="Type a name, e.g. web climb"></label><div class="ta-list" hidden></div></div>
     <details class="more" ${F.review ? "open" : ""}><summary>Paste a list instead</summary>${pasteHtml()}</details>
     <div class="savebar"><div class="errors">${F.errors.map((e) => `<span>${esc(e)}</span>`).join("") || `<span class="sub" style="color:var(--muted);font-weight:500">${f.id ? "Lines keep their printing and packed checks unless the item changes." : "Shelf stock is handed out by ship date; the rest shows as needs printing."}</span>`}</div>
-      <button type="button" class="btn ghost" data-act="cancel">Cancel</button><button type="button" class="btn accent" data-act="save" ${F.busy ? "disabled" : ""}>${F.busy ? "Saving…" : f.id ? "Save changes" : "Save order"}</button></div>
+      ${f.id ? `<button type="button" class="btn ghost" data-act="delete" ${F.busy ? "disabled" : ""}>Delete order</button>` : ""}<button type="button" class="btn ghost" data-act="cancel">Cancel</button><button type="button" class="btn accent" data-act="save" ${F.busy ? "disabled" : ""}>${F.busy ? "Saving…" : f.id ? "Save changes" : "Save order"}</button></div>
   </div>`;
   wireForm(host, custs);
   resolvePending(host);
@@ -985,6 +985,7 @@ function wireForm(host, custs) {
     if ((b = t.closest("[data-rdel]"))) { F.review.lines.splice(+b.dataset.rdel, 1); formRender(); return; }
     const act = (t.closest("[data-act]") || {}).dataset?.act; if (!act) return;
     if (act === "clearItems") { read(); f.lines = []; formRender(); }
+    if (act === "delete") { await deleteForm(); return; }
     if (act === "cancel") { if (snap(f) !== F.orig && !(await confirmBox({ title: "Discard changes?", body: "This order hasn't been saved.", ok: "Discard", danger: true }))) return; closeForm(); }
     if (act === "reviewPaste") { read(); const txt = host.querySelector("#pasteText").value; F.busy = true; formRender(); await reviewPaste(txt); F.busy = false; formRender(); }
     if (act === "editPaste") { const txt = F.review.text; F.review = null; formRender(); const ta2 = $("#odHost #pasteText"); if (ta2) ta2.value = txt; }
@@ -1017,6 +1018,16 @@ async function linesForSave(ff, make = true) {
 }
 const openWord = (f, r) => { const n = r && r.unmatched; if (!n) return ""; const why = f.lines.map((l) => (l.kind === "pick" ? pickState(l) : RES.get(String(l.text || "").trim()))).filter((x) => x && x.status === "unresolved").map((x) => x.reason);
   const same = why.length === n && new Set(why).size === 1 ? why[0] : ""; return ` · ${plural(n, "line")} ${same === "needs color" ? (n === 1 ? "needs a color" : "need a color") : same === "needs size" ? (n === 1 ? "needs a size" : "need a size") : "not in the catalog"}`; };
+// delete the order being edited (the database keeps the row marked deleted; an open order's packed shelf pieces go back to the count)
+async function deleteForm() {
+  const f = F.form; if (!f || !f.id || F.busy) return;
+  const o = store.orders.find((x) => x.id === f.id); const name = (o && o.customer) || f.customer || "This order"; const open = !o || o.status !== "Done";
+  if (!(await confirmBox({ title: "Delete this order?", body: `${esc(name)} is removed. ${open ? "Packed shelf pieces go back to Inventory." : "Inventory is not changed."}`, ok: "Delete", danger: true }))) return;
+  if (F.form !== f) return;
+  F.busy = true; formRender();
+  try { await db.saveWithRetry(f.id, (p) => ({ id: p.id, version: p.version, delete: true })); F.busy = false; closeForm(); toast(`Deleted ${name}`); await reloadOrder(f.id); await load(); }
+  catch (e) { F.busy = false; F.errors = [db.errText(e)]; if (F.form === f) formRender(); else toast(db.errText(e), true); }
+}
 async function saveForm() {
   const f = F.form; F.errors = validate(f); if (F.errors.length) { formRender(); return; }
   F.busy = true; formRender();
