@@ -19,7 +19,7 @@ const sizeOf = (ref) => cur.sizes.find((s) => sizeRef(s) === ref) || null;
 function fromServer(r) {
   return {
     id: r.id, stamp: r.stamp, name: r.name, name0: r.name, keepOld: true, category: r.category, aliases: [...(r.aliases || [])], description: r.description || "",
-    tracked: !!r.tracked, picks_color: !!r.picks_color, addon: !!r.addon, printed: r.printed !== false, catOther: false, collections: r.collections || [],
+    tracked: !!r.tracked, picks_color: !!r.picks_color, addon: !!r.addon, color_required: !!r.color_required, printed: r.printed !== false, catOther: false, collections: r.collections || [],
     def: { c1: r.default_color_1 || "", c2: r.default_color_2 || "", touched: false },
     sizes: (r.sizes || []).map((s) => ({ k: ++seq, code: s.code, name: s.name, name0: s.name, g: s.filament_g ?? "", min: s.print_minutes ?? "", profile: s.print_profile || "", archived: !!s.archived })),
     colors: { 1: [...((r.colors || {})["1"] || [])], 2: [...((r.colors || {})["2"] || [])] },
@@ -118,7 +118,7 @@ function render(err = "") {
       <div class="srow"><label style="flex:2 1 220px">Name<input id="ieName" value="${esc(cur.name)}" autocomplete="off"></label><label>Type<select id="ieCat">${cats.map((c) => `<option ${!cur.catOther && c === cur.category ? "selected" : ""}>${esc(c)}</option>`).join("")}<option value="__other" ${cur.catOther ? "selected" : ""}>Other…</option></select></label>${cur.catOther ? `<label>New type<input id="ieCatNew" value="${esc(cur.category)}" maxlength="40" autocomplete="off"></label>` : ""}</div>
       <div class="ie-field"><span>Also called</span><div class="ie-chips" id="ieAliases">${aliasChips()}</div></div>
       <div class="srow"><label>Default color<select data-def="c1">${colorOpts(cur.def.c1, "None")}</select></label>${two ? `<label>Default color 2<select data-def="c2">${colorOpts(cur.def.c2, "None")}</select></label>` : ""}<label style="flex:2 1 200px">Note<input id="ieDesc" value="${esc(cur.description)}" autocomplete="off"></label></div>
-      <div class="ce-line ce-flags"><button type="button" class="ce-tog" data-flag="picks_color" aria-pressed="${cur.picks_color}">Customer picks color</button><button type="button" class="ce-tog" data-flag="tracked" aria-pressed="${cur.tracked}">Tracked in inventory</button><button type="button" class="ce-tog" data-flag="printed" aria-pressed="${cur.printed}">We print it</button><button type="button" class="ce-tog" data-flag="addon" aria-pressed="${cur.addon}">Add-ons bar</button></div>
+      <div class="ce-line ce-flags"><button type="button" class="ce-tog" data-flag="picks_color" aria-pressed="${cur.picks_color}">Customer picks color</button><button type="button" class="ce-tog" data-flag="color_required" aria-pressed="${cur.color_required}">Color required</button><button type="button" class="ce-tog" data-flag="tracked" aria-pressed="${cur.tracked}">Tracked in inventory</button><button type="button" class="ce-tog" data-flag="printed" aria-pressed="${cur.printed}">We print it</button><button type="button" class="ce-tog" data-flag="addon" aria-pressed="${cur.addon}">Add-ons bar</button></div>
       <h4 class="ce-h">Sizes</h4>
       <div class="ce-rows">${cur.sizes.map(sizeRow).join("")}</div>
       <datalist id="ieSizeNames">${[...SIZE_OPTIONS, "Standard"].map((s) => `<option value="${esc(s)}">`).join("")}</datalist>
@@ -139,7 +139,7 @@ function setErr(t) { const e = q("#ieErr"); if (e) { e.textContent = t || ""; e.
 const num = (x) => (String(x ?? "").trim() === "" ? null : Number(String(x).trim()));
 function payload() {
   const p = { id: cur.id, stamp: cur.stamp, name: clean(cur.name), category: clean(cur.category), aliases: aliasesOut(), description: cur.description.trim(),
-    tracked: cur.tracked, picks_color: cur.picks_color, addon: cur.addon, printed: cur.printed,
+    tracked: cur.tracked, picks_color: cur.picks_color, color_required: cur.color_required, addon: cur.addon, printed: cur.printed,
     sizes: cur.sizes.filter((s) => s.code || (!s.archived && clean(s.name))).map((s) => ({ code: s.code, name: clean(s.name), filament_g: num(s.g), print_minutes: num(s.min), print_profile: s.profile.trim(), ...(s.code ? { archived: s.archived } : {}) })),
     colors: { 1: cur.colors[1], 2: cur.colors[2] },
     variants: cur.vars.map((v) => { const s = sizeOf(v.size); const o = { id: v.id, note: v.note.trim(), size_code: s ? s.code || key(s.name) : v.size0, option_code: v.opt, archived: v.archived };

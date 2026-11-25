@@ -76,10 +76,16 @@ export async function load({ done = false } = {}) {
     if (Array.isArray(srcs)) store.sources = srcs;
     store.invById = new Map(store.inv.map((r) => [r.id, r]));
     store.loadedAt = new Date(); store.err = "";
-    recompute();
+    recompute(); whyUnmatched();
   } catch (e) { store.err = db.errText(e); }
   emit();
 }
+// why an open line isn't matched, as the database sees it (hq.resolve_lines), so Bin View can say "Needs a color" and the form can open it as the item
+function whyUnmatched() {
+  const todo = [...new Set(store.open.flatMap((o) => o.lines || []).filter((l) => l.match === "unmatched" && !isEncText(l.text)).map((l) => cleanText(l.text)).filter((t) => t && !RES.has(t)))];
+  if (todo.length) db.resolveLines(todo).then((res) => { let n = 0; for (const t of todo) if (res && res[t]) { RES.set(t, res[t]); n++; } if (n) emit(); }).catch((e) => console.error(e));
+}
+const needsColor = (l) => l.match === "unmatched" && (RES.get(cleanText(l.text)) || {}).reason === "needs color";
 export async function reloadOrder(id) {
   const started = Date.now();
   try { const o = await db.readOrder(id); if (db.lastWriteAt() > started) return reloadOrder(id); const i = store.orders.findIndex((x) => x.id === id); if (o) { if (i >= 0) store.orders[i] = o; else store.orders.push(o); } else if (i >= 0) store.orders.splice(i, 1); recompute(); }
@@ -333,7 +339,7 @@ function lineHtml(o, l, cardTag = "") {
   const marks = (l.tag === "addon" || (!l.tag && /add-?on/i.test(said)) ? `<span class="bvtype t-addon" role="img" aria-label="Add-on" data-tip="Add-on">${SVF(IC.tag).replace('fill="currentColor"', 'fill="none"')}</span>` : "")
     + (l.tag === "gift" || freeNames.some((f) => normName(said).includes(f) || f.includes(normName(said))) ? `<span class="bvtype t-free" role="img" aria-label="Freebie" data-tip="Freebie">${SVF(IC.gift).replace('fill="currentColor"', 'fill="none"')}</span>` : "");
   const icon = marks + stIcon;
-  const sub = e.st === "out" && !head ? `<span class="bvsub">${(r && Number(r.in_stock) > 0 ? "Reserved for earlier orders" : "Out of stock")}${e.a ? ` · ${e.a} of ${qty} on the shelf` : ""}</span>` : e.part ? `<span class="bvsub">${e.a} of ${qty} on the shelf · print ${qty - e.a}</span>` : (l.match === "unmatched" && !head ? `<button type="button" class="ninvfind" data-oeline="${key}" data-oid="${o.id}">Not in catalog</button>` : "");
+  const sub = e.st === "out" && !head ? `<span class="bvsub">${(r && Number(r.in_stock) > 0 ? "Reserved for earlier orders" : "Out of stock")}${e.a ? ` · ${e.a} of ${qty} on the shelf` : ""}</span>` : e.part ? `<span class="bvsub">${e.a} of ${qty} on the shelf · print ${qty - e.a}</span>` : (l.match === "unmatched" && !head ? `<button type="button" class="ninvfind" data-oeline="${key}" data-oid="${o.id}">${needsColor(l) ? "Needs a color" : "Not in catalog"}</button>` : "");
   const noteHtml = l.note ? `<span class="bvsub bvnote">${esc(l.note)}</span>` : "";
   const cv = l.variant_id != null ? cat.varById.get(String(l.variant_id)) : null; const customLine = !head && (cv ? cv.size_code === "custom" : !r && isCustom(l.text));
   const dims = customLine ? fmtSize(l) : "";
@@ -413,9 +419,9 @@ export function binRender() {
 }
 function binDraw(box) {
   const st = $("#binStatus");
-  const nocat = store.open.reduce((n, o) => n + (o.lines || []).filter((l) => l.match === "unmatched" && !isEncText(l.text)).length, 0);
+  const unm = store.open.flatMap((o) => (o.lines || []).filter((l) => l.match === "unmatched" && !isEncText(l.text))); const nocol = unm.filter(needsColor).length; const nocat = unm.length - nocol;
   const review = store.open.filter((o) => o.review === "pending").length;
-  if (st) st.textContent = store.err ? "⚠ " + store.err : store.loadedAt ? `${plural(store.open.length, "open order")}${nocat ? ` · ⚠ ${plural(nocat, "line")} not in the catalog` : ""}${review ? ` · ${review} to review` : ""} · synced ${store.loadedAt.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })} · refreshes every 20 s` : "Reading orders…";
+  if (st) st.textContent = store.err ? "⚠ " + store.err : store.loadedAt ? `${plural(store.open.length, "open order")}${nocat ? ` · ⚠ ${plural(nocat, "line")} not in the catalog` : ""}${nocol ? ` · ⚠ ${plural(nocol, "line")} ${nocol === 1 ? "needs" : "need"} a color` : ""}${review ? ` · ${review} to review` : ""} · synced ${store.loadedAt.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })} · refreshes every 20 s` : "Reading orders…";
   const ns = $("#binSources"); if (ns) { const s = store.sources || []; ns.hidden = !s.length || BIN.mode === "done"; ns.innerHTML = s.length ? `<div class="nsrchead"><span class="np np-orange">⚠ ${plural(s.length, "sale")} not entered</span></div>${s.map((x) => `<div class="nsrcsale"><div class="nsrchead"><b>${esc(x.buyer || "")}</b><span class="np np-${platColor(x.platform)}">${esc(x.platform)} #${esc(x.number)}</span><span class="sub">ordered ${esc(fmtDay(x.order_date))}${x.ship_by ? ` · ship by ${esc(fmtDay(x.ship_by))}` : ""}</span><button type="button" class="btn ghost mini" data-srcnew="${x.id}">+ Enter order</button></div>${(x.items || []).map(srcItemHtml).join("")}${x.note ? `<div class="nsrcnote">${esc(x.note)}</div>` : ""}</div>`).join("")}` : ""; }
   const sel = $("#binPlat"); if (sel) { const plats = [...new Set(store.orders.flatMap((o) => o.platform || []))].sort(); const cur = sel.value; sel.innerHTML = `<option value="">All platforms</option>` + plats.map((p) => `<option ${p === cur ? "selected" : ""}>${esc(p)}</option>`).join(""); }
   document.querySelectorAll("[data-binlay]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.binlay === BIN.layout)));
@@ -638,6 +644,8 @@ function lineFromSaved(l) {
   const v = (l.notion_inventory_id && cat.varByNotion.get(l.notion_inventory_id)) || (l.variant_id != null && cat.varById.get(String(l.variant_id))) || null;
   const base = { uid: l.uid, qty: Number(l.qty) || 1, note: l.note || "", tag: l.tag || "", group_uid: l.group_uid || null, print_state: l.print_state, packed: l.packed, size_1: l.size_1 ?? "", size_2: l.size_2 ?? "", size_3: l.size_3 ?? "", size_unit: l.size_unit || "in", size_basis: l.size_basis || "piece" };
   if (v) { const c = schemeColors(v.color_scheme_id); return { ...base, kind: "pick", product_id: v.product_id, size_code: v.size_code, c1: c.c1, c2: c.c2, option_code: v.option_code || "standard", untracked: false, said: normName(cleanText(l.text)) === normName(v.name) ? "" : cleanText(l.text) }; }
+  const x = needsColor(l) ? RES.get(cleanText(l.text)) : null; const xp = x && cat.byProduct.get(x.product_id);
+  if (xp) { const pl = pickLine(xp.id, { size_code: x.size_code }); const plain = xp.name + (pl.size_code && pl.size_code !== "standard" ? ` (${sizeName(xp, pl.size_code)})` : ""); return { ...pl, ...base, said: normName(cleanText(l.text)) === normName(plain) ? "" : cleanText(l.text) }; }
   return { ...base, kind: "text", text: cleanText(l.text), was: cleanText(l.text), inv: l.notion_inventory_id || "", untracked: l.match === "untracked" };
 }
 const pickLine = (product_id, extra = {}) => { const p = cat.byProduct.get(product_id); const d = p && p.default_scheme ? schemeColors(p.default_scheme) : { c1: "", c2: "" }; return { kind: "pick", product_id, size_code: p ? defaultSize(p, extra.size_code) : "standard", c1: d.c1, c2: d.c2, option_code: "standard", qty: 1, note: "", tag: "", untracked: false, ...extra }; };
@@ -923,7 +931,7 @@ function wireForm(host, custs) {
 function validate(f) {
   const errs = []; if (!f.customer.trim()) errs.push("Add the customer's name"); if (!f.platform.length) errs.push("Pick the platform the order came from"); if (!f.ship_by) errs.push("Pick a ship-by date"); if (!f.lines.length) errs.push("Add at least one item");
   if (f.collection && !f.id) (f.need || []).forEach((k) => errs.push(`Pick the ${k.toLowerCase()}`)); // a new order can't be saved with a collection still waiting on a choice
-  f.lines.forEach((l, i) => { if (l.kind === "text" && !String(l.text).trim()) errs.push(`Line ${i + 1} has no text`); if (l.kind === "pick" && l.size_code === "custom" && !(Number(l.size_1) > 0)) errs.push(`Line ${i + 1}: custom size needs its measurements`); if (l.kind === "pick" && !l.size_code && ((cat.byProduct.get(l.product_id) || {}).size_codes || []).length > 1) errs.push(`Line ${i + 1}: pick a size`); });
+  f.lines.forEach((l, i) => { if (l.kind === "text" && !String(l.text).trim()) errs.push(`Line ${i + 1} has no text`); if (l.kind === "pick" && l.size_code === "custom" && !(Number(l.size_1) > 0)) errs.push(`Line ${i + 1}: custom size needs its measurements`); if (l.kind === "pick" && !l.size_code && ((cat.byProduct.get(l.product_id) || {}).size_codes || []).length > 1) errs.push(`Line ${i + 1}: pick a size`); if (l.kind === "pick" && !l.c1 && (cat.byProduct.get(l.product_id) || {}).color_required) errs.push(`Line ${i + 1}: pick a color`); });
   return errs;
 }
 // form lines -> save_order lines. Catalog picks carry a variant id; a pick the catalog doesn't have yet is made first (hq.pick_variant make).
