@@ -651,7 +651,7 @@ function lineFromSaved(l) {
   if (xp) { const pl = pickLine(xp.id, { size_code: x.size_code }); const plain = xp.name + (pl.size_code && pl.size_code !== "standard" ? ` (${sizeName(xp, pl.size_code)})` : ""); return { ...pl, ...base, said: normName(cleanText(l.text)) === normName(plain) ? "" : cleanText(l.text) }; }
   return { ...base, kind: "text", text: cleanText(l.text), was: cleanText(l.text), inv: l.notion_inventory_id || "", untracked: l.match === "untracked" };
 }
-const pickLine = (product_id, extra = {}) => { const p = cat.byProduct.get(product_id); const d = p && p.default_scheme ? schemeColors(p.default_scheme) : { c1: "", c2: "" }; return { kind: "pick", product_id, size_code: p ? defaultSize(p, extra.size_code) : "standard", c1: d.c1, c2: d.c2, option_code: "standard", qty: 1, note: "", tag: "", untracked: false, ...extra }; };
+const pickLine = (product_id, extra = {}) => { const p = cat.byProduct.get(product_id); const d = p && p.default_scheme ? schemeColors(p.default_scheme) : { c1: "", c2: "" }; const one = p && (p.size_codes || []).length === 1 && p.size_codes[0].code === "standard"; /* a one-size piece never takes the enclosure's size */ return { kind: "pick", product_id, c1: d.c1, c2: d.c2, option_code: "standard", qty: 1, note: "", tag: "", untracked: false, ...extra, size_code: one ? "standard" : extra.size_code || (p ? defaultSize(p) : "standard") }; };
 const isEncLine = (l) => (l.kind === "pick" ? l.product_id === "enclosure" : isEncText(l.text));
 
 /* ===================== order form (new / edit) ===================== */
