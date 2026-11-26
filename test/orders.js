@@ -664,6 +664,11 @@ const fromOrder = (o) => {
   return { id: o.id, version: o.version, customer: o.customer || "", handle: o.handle || "", platform: [...(o.platform || [])], order_number: o.order_number || "", shipping_number: o.shipping_number || "", order_date: o.order_date || "", ship_by: o.ship_by || "", ship_type: o.ship_type || "Standard", status: o.status, important: o.important || "", summary: o.summary || "", state: o.state || "", collection: coll ? coll.id : "", choices: {}, lines };
 };
 const snap = (f) => JSON.stringify(f);
+// a piece whose color follows the order's collection (Bowl Feeder): products.color_by_collection, "*" = any other order.
+// The form's collection decides; with none picked, the pieces that belong to one collection do. Two answers = the person picks.
+const collColor = (f, p) => { const m = p.color_by_collection; if (!m) return ""; const ids = f.collection ? [f.collection] : f.lines.filter((l) => l.kind === "pick" && l.product_id !== p.id).map((l) => (cat.byProduct.get(l.product_id) || {}).collections || []).filter((c) => c.length === 1).map((c) => c[0]); const hits = [...new Set(ids.map((id) => m[id]).filter(Boolean))]; return hits.length === 1 ? hits[0] : hits.length ? "" : m["*"] || ""; };
+// fills an empty color, and follows the collection while the color is still the one filled in here; a color the person picked stays
+function fillColorDefaults(f) { for (const l of f.lines) { if (l.kind !== "pick") continue; const p = cat.byProduct.get(l.product_id); if (!p || !p.color_by_collection) continue; if (l.c1 && !(l.cdef && schemeFor(l.c1, l.c2) === l.cdef)) continue; const s = collColor(f, p); if (!s || (l.c1 && s === l.cdef)) continue; const c = schemeColors(s); if (!c.c1) continue; l.c1 = c.c1; l.c2 = c.c2; l.cdef = s; } }
 const encSize = (f) => { const e = f.lines.find((l) => l.kind === "pick" && l.product_id === "enclosure"); return e ? e.size_code : ""; };
 const encDoorOf = (f) => { const e = f.lines.find((l) => l.kind === "pick" && l.product_id === "enclosure"); return e ? e.option_code || "standard" : "standard"; };
 // door options the catalog has for an enclosure size (standard = latch door); a size with only one door shows no choice
@@ -841,7 +846,7 @@ function custCard(f, custs) {
 // redrawing the form keeps the field the person is in (and their place on the page): a pick or a tag tap must not drop focus
 const focusKey = (el) => { if (!el || !el.dataset) return ""; const d = el.dataset; if (el.id) return "#" + el.id; if (d.f) return `[data-f="${d.f}"]`; if (d.l != null && d.lf) return `[data-l="${d.l}"][data-lf="${d.lf}"]`; return ""; }; // not the item search box: refocusing it would reopen its list
 function formRender() {
-  const f = F.form; if (!f || F.drawing) return; const host = $("#odHost");
+  const f = F.form; if (!f || F.drawing) return; const host = $("#odHost"); fillColorDefaults(f);
   const a = document.activeElement; const key = host.contains(a) ? focusKey(a) : ""; const sel = key && a.selectionStart != null ? [a.selectionStart, a.selectionEnd] : null; const top = window.scrollY;
   // replacing the form drops the focused field, and the browser fires its blur/change while the old form is being torn down: a handler that read or redrew then would write old fields over the new lines and break this draw
   F.drawing = true; try { formDraw(f, host); } finally { F.drawing = false; }
